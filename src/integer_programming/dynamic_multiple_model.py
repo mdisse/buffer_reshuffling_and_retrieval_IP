@@ -5,7 +5,7 @@ from src.integer_programming.initial_config_constraints import *
 from math import ceil
 
 class DynamicMultipleModel:
-    def __init__(self, instance: Instance, verbose=False) -> None:
+    def __init__(self, instance: Instance, decisions=False, verbose=False) -> None:
         self.instance = instance
         self.verbose = verbose
         self.model = gp.Model("BRR_Dynamic_Multiple_AMRs")
@@ -34,6 +34,8 @@ class DynamicMultipleModel:
 
         self.add_objectives()
         self.add_constraints()
+        if decisions:
+            self.add_decisions(decisions)
 
     def create_variables(self) -> None:
         """ 
@@ -188,6 +190,84 @@ class DynamicMultipleModel:
         if self.verbose: 
             print(f"Constraints: {len(self.model.getConstrs())}")
 
+    def add_decisions(self, decisions: list[str]) -> None:
+        """
+        Adds constraints to the model to fix variables based on a list of decision strings.
+        Each decision string identifies a variable (e, x, y, or z) and its indices.
+        The corresponding variable in the model is constrained to be equal to 1.
+        Raises ValueError if a decision string is malformed or the variable is not found.
+        """
+        if self.verbose:
+            print(f"Received decisions to fix: {decisions}")
+
+        for decision_str in decisions:
+            parts = decision_str.split('_')
+            var_type = parts[0]
+            
+            var_to_set = None
+            
+            try:
+                if var_type == 'e':
+                    # Expected format: e_i<val>_j<val>_k<val>_l<val>_t<val>_v<val>
+                    if len(parts) == 7:
+                        i_val = int(parts[1][1:])
+                        j_val = int(parts[2][1:])
+                        k_val = int(parts[3][1:])
+                        l_val = int(parts[4][1:])
+                        time_val = int(parts[5][1:])
+                        vehicle_val = int(parts[6][1:])
+                        var_to_set = self.e_vars.get((i_val, j_val, k_val, l_val, time_val, vehicle_val))
+                    else:
+                        raise ValueError(f"Malformed decision string for type 'e': {decision_str}. Expected 7 parts, got {len(parts)}.")
+                elif var_type == 'x':
+                    # Expected format: x_i<v1>_j<v2>_k<v3>_l<v4>_n<v5>_t<v6>_v<v7>
+                    if len(parts) == 8:
+                        i_val = int(parts[1][1:])
+                        j_val = int(parts[2][1:])
+                        k_val = int(parts[3][1:])
+                        l_val = int(parts[4][1:])
+                        n_val = int(parts[5][1:])
+                        time_val = int(parts[6][1:])
+                        vehicle_val = int(parts[7][1:])
+                        var_to_set = self.x_vars.get((i_val, j_val, k_val, l_val, n_val, time_val, vehicle_val))
+                    else:
+                        raise ValueError(f"Malformed decision string for type 'x': {decision_str}. Expected 8 parts, got {len(parts)}.")
+                elif var_type == 'y':
+                    # Expected format: y_i<v1>_j<v2>_n<v3>_t<v4>_v<v5>
+                    if len(parts) == 6:
+                        i_val = int(parts[1][1:])
+                        j_val = int(parts[2][1:])
+                        n_val = int(parts[3][1:])
+                        time_val = int(parts[4][1:])
+                        vehicle_val = int(parts[5][1:])
+                        var_to_set = self.y_vars.get((i_val, j_val, n_val, time_val, vehicle_val))
+                    else:
+                        raise ValueError(f"Malformed decision string for type 'y': {decision_str}. Expected 6 parts, got {len(parts)}.")
+                elif var_type == 'z':
+                    # Expected format: z_i<v1>_j<v2>_n<v3>_t<v4>_v<v5>
+                    if len(parts) == 6:
+                        i_val = int(parts[1][1:])
+                        j_val = int(parts[2][1:])
+                        n_val = int(parts[3][1:])
+                        time_val = int(parts[4][1:])
+                        vehicle_val = int(parts[5][1:])
+                        var_to_set = self.z_vars.get((i_val, j_val, n_val, time_val, vehicle_val))
+                    else:
+                        raise ValueError(f"Malformed decision string for type 'z': {decision_str}. Expected 6 parts, got {len(parts)}.")
+                else:
+                    raise ValueError(f"Unknown variable type '{var_type}' in decision string: {decision_str}")
+            except ValueError as e: # Catches errors from int() conversion or malformed strings
+                raise ValueError(f"Error parsing decision string '{decision_str}': {e}")
+            
+            if var_to_set:
+                self.model.addConstr(var_to_set == 1, name=f"fix_{decision_str}")
+                if self.verbose:
+                    print(f"Constraint added: {var_to_set.VarName} == 1")
+            else:
+                # This case handles when var_to_set is None after a successful parse (variable not in dictionary)
+                raise ValueError(f"Variable for decision '{decision_str}' not found in the model. Ensure it was defined in create_variables() and the indices are correct.")
+        
+        self.model.update()
 
     def get_state(self, t=1): 
         """
@@ -232,7 +312,7 @@ class DynamicMultipleModel:
     def get_solution(self):
         if self.model.status == gp.GRB.OPTIMAL or self.model.SolCount > 0:  # Check if the model was solved optimally
             solution = {}  # Initialize an empty dictionary to store variable names and their optimized values
-            # Filter variables that start with 'e', 'x', or 'y' and have a value of 1
+            # Filter variables that start with 'e', 'x', 'y' or 'z' and have a value of 1
             for var in self.model.getVars():
                 if var.varName.startswith(('e', 'x', 'y', 'z')) and var.x == 1:
                     solution[var.varName] = var.x

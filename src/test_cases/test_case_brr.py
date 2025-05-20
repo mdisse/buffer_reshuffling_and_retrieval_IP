@@ -16,7 +16,7 @@ class TestCaseBrr:
     """
     This class is used to test the BRR problem
     """
-    def __init__(self, instance: Instance, variant="static", verbose=False) -> None:
+    def __init__(self, instance: Instance, variant="static", decisions=False, verbose=False) -> None:
         self.instance = instance
         self.variant = variant
         self.feasible = None
@@ -27,7 +27,7 @@ class TestCaseBrr:
         elif self.variant == "dynamic":
             sys.exit("Dynamic model not implemented yet")
         elif self.variant == "dynamic_multiple":
-            self.model = DynamicMultipleModel(self.instance, verbose=verbose)
+            self.model = DynamicMultipleModel(self.instance, decisions=decisions, verbose=verbose)
         else:
             ValueError("The choosen variant is not implemented")
         self.model.solve()
