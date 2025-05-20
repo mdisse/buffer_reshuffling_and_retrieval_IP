@@ -1,0 +1,8 @@
+gurobipy==12.0.2
+imageio==2.36.1
+matplotlib==3.10.3
+networkx==3.4.2
+numpy==2.2.6
+ortools==9.12.4544
+pandas==2.2.3
+tupledict==1.1
