@@ -6,9 +6,8 @@ import argparse
 import json
 from src.instance.instance_loader import InstanceLoader
 from src.instance.instance import Instance
-from src.examples_gen.unit_load_gen import UnitLoadGenerator 
 from src.test_cases.test_case_brr import TestCaseBrr
-import gurobipy as gp 
+import re
 
 def get_decisions(solution):
     """ 
@@ -43,14 +42,24 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.solution_path.endswith(".json"):
+        solution_path = os.path.abspath(args.solution_path)
         with open(args.solution_path, "r") as f:
             solution = json.load(f)
     else: 
         raise ValueError("The solution file must be a json file")
     try: 
-        instance_path = args.solution_path.replace("resultsBRR", "inputsBRR")
+        instance_path = solution_path.replace("resultsBRR", "inputsBRR")
         instanceLoader = InstanceLoader(instance_path)
         instance = Instance(instanceLoader=instanceLoader)
+    except FileNotFoundError as e:
+        try: 
+            instance_path = solution_path.replace("resultsBRR", "inputsBRR")
+            instance_path = re.sub(r"fleet_size_\d+/", "", instance_path)
+            instanceLoader = InstanceLoader(instance_path)
+            instance = Instance(instanceLoader=instanceLoader)
+        except FileNotFoundError as e:
+            print(f"Error loading instance: {e}")
+            sys.exit(1)
     except Exception as e:
         print(f"Error loading instance: {e}")
         sys.exit(1)
