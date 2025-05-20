@@ -76,19 +76,21 @@ def generate_instances():
     ]
     ad = [
         {"north" : True, "east" : True, "south" : True, "west" : True},
-        {"north" : False, "east" : False, "south" : True, "west" : False},
+        # {"north" : False, "east" : False, "south" : True, "west" : False},
         # {"north" : False, "east" : False, "south" : True, "west" : True},
-        {"north" : False, "east" : True, "south" : True, "west" : False}, 
-        {"north" : True, "east" : False, "south" : True, "west" : False}, 
+        # {"north" : False, "east" : True, "south" : True, "west" : False}, 
+        # {"north" : True, "east" : False, "south" : True, "west" : False}, 
     ]
     # seeds = [i for i in range(10)]
-    seeds = [7, 8, 9, 10, 11]
-    fill_levels = [i/10 for i in range(5, 11)]
-    time_window_lengths = [i for i in range(30, 61, 10)]
+    seeds = [1]
+    # fill_levels = [i/10 for i in range(5, 11)]
+    fill_levels = [0.1]
+    # time_window_lengths = [i for i in range(30, 61, 10)]
+    time_window_lengths = [30]
     vehicle_speeds = [1]
-    fleet_sizes = [1, 2, 3]
-    rs_maxes = [200, 300, 400]
-    as_max = 150
+    fleet_sizes = [1]
+    rs_maxes = [100]
+    as_max = 50
     for file in files: 
         for time_window_length in time_window_lengths:
             for vehicle_speed in vehicle_speeds:
