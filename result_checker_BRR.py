@@ -23,6 +23,82 @@ def get_decisions(solution):
                 all_decision_values.append(decision_value)
     return all_decision_values
 
+def change_decisions(decisions_list: list[str]) -> list[str]:
+    """
+    Provides a text-based interactive way to modify a list of decision strings.
+    """
+    current_decisions = list(decisions_list) # Make a copy
+
+    while True:
+        print("\\n--- Current Decisions ---")
+        if not current_decisions:
+            print("  (No decisions in the list)")
+        else:
+            for i, decision in enumerate(current_decisions):
+                print(f"  {i + 1}: {decision}")
+        print("-------------------------")
+        
+        user_input = input("Enter action ('help' for commands, 'done' to finish): ").strip()
+        # Split into command, and up to two arguments (e.g., index and value)
+        parts = user_input.split(maxsplit=2) 
+        
+        command = parts[0].lower() if parts else ""
+        
+        if command == "done":
+            break
+        elif command == "help":
+            print("\\nAvailable commands:")
+            print("  add <decision_string>          - Add a new decision.")
+            print("  change <index> <new_decision>  - Change the decision at the specified index (1-based).")
+            print("  delete <index>                 - Delete the decision at the specified index (1-based).")
+            print("  done                           - Exit and return the modified list.")
+            print("  help                           - Show this help message.")
+        elif command == "add":
+            if len(parts) > 1:
+                # The rest of the input is the decision string
+                decision_to_add = user_input.split(maxsplit=1)[1]
+                current_decisions.append(decision_to_add)
+                print(f"Added: '{decision_to_add}'")
+            else:
+                print("Error: 'add' command requires a decision string. Usage: add <decision_string>")
+        elif command in ["change", "delete"]:
+            if len(parts) < 2:
+                print(f"Error: '{command}' command requires an index. Usage: {command} <index> [new_value_for_change]")
+                continue
+            try:
+                index = int(parts[1]) - 1 # Convert to 0-based index
+                
+                if not (0 <= index < len(current_decisions)):
+                    print("Error: Index out of bounds.")
+                    continue
+                
+                if command == "delete":
+                    deleted_item = current_decisions.pop(index)
+                    print(f"Deleted: '{deleted_item}'")
+                elif command == "change":
+                    if len(parts) < 3:
+                        print("Error: 'change' command requires an index and a new decision string. Usage: change <index> <new_decision_string>")
+                        continue
+                    old_value = current_decisions[index]
+                    new_value = parts[2]
+                    current_decisions[index] = new_value
+                    print(f"Changed index {index + 1}: '{old_value}' -> '{new_value}'")
+            except ValueError:
+                print("Error: Invalid index. Index must be a number.")
+        elif not command: # Empty input
+            continue
+        else:
+            print(f"Unknown command: '{command}'. Type 'help' for available commands.")
+            
+    print("\\n--- Final Decisions ---")
+    if not current_decisions:
+        print("  (No decisions in the list)")
+    else:
+        for i, decision in enumerate(current_decisions):
+            print(f"  {i + 1}: {decision}")
+    print("-----------------------")
+    return current_decisions
+
 def check_instance(instance, solution, verbose=False): 
     """
     Check if the solution is valid for the given instance.
@@ -30,7 +106,8 @@ def check_instance(instance, solution, verbose=False):
     print("Checking instance: ", instance)
     try: 
         decisions = get_decisions(solution)
-        test_case = TestCaseBrr(instance=instance, variant="dynamic_multiple", decisions=decisions, verbose=verbose)
+        updated_decisions = change_decisions(decisions)
+        test_case = TestCaseBrr(instance=instance, variant="dynamic_multiple", decisions=updated_decisions, verbose=verbose)
         return True
     except Exception as e:
         print(f"Error creating test case: {e}")
@@ -63,8 +140,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error loading instance: {e}")
         sys.exit(1)
-    result_legit = check_instance(instance, solution)
-    if result_legit: 
-        print("Solution is valid.")
-    else: 
-        print("Solution is not valid.")
+    check_instance(instance, solution)
