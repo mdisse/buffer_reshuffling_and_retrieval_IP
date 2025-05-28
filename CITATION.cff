@@ -1,0 +1,28 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: Buffer Reshuffling and Retrieval IP Models
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Max
+    family-names: Disselnmeyer
+    email: max.disselnmeyer@kit.edu
+    name-particle: Max
+    affiliation: Karlsruhe Institute of Technology
+    orcid: 'https://orcid.org/0009-0008-5689-2235'
+  - name: Institute for Information Management in Engineering
+    address: 'Zirkel, 2'
+    city: Karlsruhe
+    post-code: '76131'
+    email: max.disselnmeyer@kit.edu
+    country: DE
+    location: Zirkel 2
+    region: Baden-Württemberg
+    website: 'https://www.imi.kit.edu/english/index.php'
+repository-code: >-
+  https://github.com/mdisse/buffer_reshuffling_and_retrieval_IP
+license: MIT
