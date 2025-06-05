@@ -12,6 +12,9 @@ import re
 def get_decisions(solution):
     """ 
     Extract decisions from the solution.
+    Requires the solution to be a dictionary with a "results" key
+    that contains a "decisions" key, which is a dictionary mapping vehicle IDs to their decisions.
+    Each decision is expected to be a dictionary with a "decision" key.
     """
     all_decision_values = []
     results = solution.get("results", {})
@@ -99,16 +102,30 @@ def change_decisions(decisions_list: list[str]) -> list[str]:
     print("-----------------------")
     return current_decisions
 
-def check_instance(instance, solution, verbose=False): 
+def create_solution(decisions):
+    """
+    Create a solution dictionary from the list of decisions.
+    The solution is structured to match the expected format for BRR.
+    """
+    print(decisions)
+    solution = {}
+    for decision in decisions:
+        solution[decision] = 1
+    return solution
+
+def check_instance(instance, solution, change=False, verbose=False): 
     """
     Check if the solution is valid for the given instance.
     """
     print("Checking instance: ", instance)
     try: 
         decisions = get_decisions(solution)
-        updated_decisions = change_decisions(decisions)
-        test_case = TestCaseBrr(instance=instance, variant="dynamic_multiple", decisions=updated_decisions, verbose=verbose)
-        return True
+        if change:
+            decisions = change_decisions(decisions)
+        solution = create_solution(decisions)
+        testcase = TestCaseBrr(instance=instance, variant="dynamic_multiple", solution=solution, verbose=verbose, check_solution=True)
+        status = testcase.check_solution()
+        print(status)
     except Exception as e:
         print(f"Error creating test case: {e}")
         return False
