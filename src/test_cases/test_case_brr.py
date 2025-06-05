@@ -9,14 +9,14 @@ from src.integer_programming.dynamic_multiple_model import DynamicMultipleModel
 from src.test_cases.writer_functions import save_resultsBrr
 import numpy as np
 import gurobipy as gp
+import gurobi_modelanalyzer as gma
 import re
-
 
 class TestCaseBrr: 
     """
     This class is used to test the BRR problem
     """
-    def __init__(self, instance: Instance, variant="static", decisions=False, verbose=False) -> None:
+    def __init__(self, instance: Instance, variant="static", solution=False, verbose=False, check_solution=False) -> None:
         self.instance = instance
         self.variant = variant
         self.feasible = None
@@ -27,12 +27,17 @@ class TestCaseBrr:
         elif self.variant == "dynamic":
             sys.exit("Dynamic model not implemented yet")
         elif self.variant == "dynamic_multiple":
-            self.model = DynamicMultipleModel(self.instance, decisions=decisions, verbose=verbose)
+            # self.model = DynamicMultipleModel(self.instance, decisions=decisions, verbose=verbose)
+            self.model = DynamicMultipleModel(self.instance, verbose=verbose)
         else:
             ValueError("The choosen variant is not implemented")
-        self.model.solve()
-        self.print_inital_state()
-        self.print_solution(verbose)
+        if check_solution:
+            self.sc = gma.SolCheck(self.model.model)
+            self.sol = {self.model.model.getVarByName(k): v for k, v in solution.items()}
+        else:
+            self.model.solve()
+            self.print_inital_state()
+            self.print_solution(verbose)
 
         if verbose: 
             self.model.print_c()
@@ -228,6 +233,10 @@ class TestCaseBrr:
                 # self.results[f"vehicle_{k}"] = vehicle_dict
             save_resultsBrr(filename, self)
             print(f"Results saved to {filename}")
+        
+    def check_solution(self):
+        self.sc.test_sol(self.sol)
+        return self.sc.Status
 
 
 if __name__ == "__main__": 
