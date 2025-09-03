@@ -127,8 +127,9 @@ def one_move_per_vehicle_source_dm(m):
             constr_name = f"one_move_per_vehicle_source_time{t}_vehicle{v.get_id()}"
             m.model.addConstr(
                 gp.quicksum(m.z_vars[(k.get_ap_id(), l.get_id(), n.get_id(), t, v.get_id())] for k in m.Lanes[1:-1] for l in k.get_tiers() for n in m.Unit_loads) +
-                gp.quicksum(m.y_vars[(source.get_ap_id(), s_tier.get_id(), n.get_id(), t, v.get_id())] for n in m.Unit_loads)
-                == m.c_vars[(source.get_ap_id(), s_tier.get_id(), t, v.get_id())],
+                gp.quicksum(m.y_vars[(source.get_ap_id(), s_tier.get_id(), n.get_id(), t, v.get_id())] for n in m.Unit_loads) +
+                gp.quicksum(m.e_vars[(source.get_ap_id(), s_tier.get_id(), k.get_ap_id(), l.get_id(), t, v.get_id())] for k in m.Lanes for l in k.get_tiers()) ==
+                m.c_vars[(source.get_ap_id(), s_tier.get_id(), t, v.get_id())],
                 name=constr_name)
             # print(f"{m.c_vars[(source.get_ap_id(), s_tier.get_id(), t, v.get_id())]} = {[m.z_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t, v.get_id())] for i in m.Lanes[1:-1] for j in i.get_tiers() for n in m.Unit_loads]}")
 
@@ -172,7 +173,7 @@ def one_move_per_ul_dm(m):
                         name=constr_name)
 
 def config_update(m):
-    # ensures that the configuration of the warehouse is updated after every move
+    # ensures that the configuration of the buffer is updated after every move
     for i in m.Lanes[:-1]:
         for j in i.get_tiers():
             for t in range(2, m.T):  
@@ -202,7 +203,7 @@ def config_update(m):
                     )
 
 def config_update_dm(m):
-    # ensures that the configuration of the warehouse is updated after every move
+    # ensures that the configuration of the buffer is updated after every move
     for i in m.Lanes[1:-1]:
         for j in i.get_tiers():
             for t in range(2, m.T):  

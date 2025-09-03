@@ -368,14 +368,14 @@ class NetworkFlowModel():
                 dict_node_1 = 's{}'.format(node_1)
                 difference = node_1 - node_2  # get the difference to know the direction of the arc
                 if difference == -1:
-                    # the indices from the upper border of the warehouse until node_2(the destination node)
+                    # the indices from the upper border of the buffer until node_2(the destination node)
                     if node_2 % self.length == 0:
                         # special case if the destination node is on the lower border, np.arange.stop has to be adjusted
                         sequence_lane_indices = np.arange(node_2, (node_2 // self.length - 1) * self.length, step=-1)
                     else:
                         sequence_lane_indices = np.arange(node_2, (node_2 // self.length) * self.length, step=-1)
                 if difference == 1:
-                    # the indices from node_1 until the lower border of the warehouse
+                    # the indices from node_1 until the lower border of the buffer
                     sequence_lane_indices = np.arange(node_2, ((node_2 // self.length) + 1) * self.length + 1)
                 if difference == self.length:
                     sequence_lane_indices = np.arange(node_2, self.length * self.width + 1, step=self.length)
@@ -426,9 +426,9 @@ class NetworkFlowModel():
             # The origin is connected to the compass directions
             if node_1 == 'o' and node_2 == "north":
                 return True
-            if node_1 == 'north':  # the north node has edges to the most north row of the warehouse
+            if node_1 == 'north':  # the north node has edges to the most north row of the buffer
                 if node_2 in self.north_row:
-                    return True  # node_2 is in most north row of warehouse -> neighbour_check = True!
+                    return True  # node_2 is in most north row of buffer -> neighbour_check = True!
                 else:
                     return False
         if self.access[1]:
@@ -489,7 +489,7 @@ class NetworkFlowModel():
             sequence2 = sequence[:-1]  # Remove the last/target stack
             cost_value_previous = self.cost_calculation(sequence2)
             cost_value_increment = cost_value_current - cost_value_previous
-        else:  # if we were at the border of the warehouse just return the current cost_value
+        else:  # if we were at the border of the buffer just return the current cost_value
             cost_value_increment = cost_value_current
         if cost_value_increment == 0:  # Change to small costs to avoid turnings
             cost_value_increment = 0.0001  # 0.0001

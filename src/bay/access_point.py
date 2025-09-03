@@ -62,3 +62,7 @@ class AccessPoint:
         data["global_x"] = self.global_x
         data["global_y"] = self.global_y
         return data
+
+
+    def get_id(self):
+        return self.ap_id

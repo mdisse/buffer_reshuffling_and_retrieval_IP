@@ -3,7 +3,7 @@ import gurobipy as gp
 def unit_load_start(m): 
     """
     ensures that the unit loads are at the start position at time 1
-    get the layout of the warehouse from the initial bay state and
+    get the layout of the buffer from the initial bay state and
     set the initial position of the unit loads
     """
     t = 1
@@ -19,7 +19,7 @@ def unit_load_start(m):
 def unit_load_start_dm(m): 
     """
     ensures that the unit loads are at the start position at time 1
-    get the layout of the warehouse from the initial bay state and
+    get the layout of the buffer from the initial bay state and
     set the initial position of the unit loads
     """
     t = 1

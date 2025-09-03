@@ -13,7 +13,7 @@ class InstanceLoader():
         instance_file = self._preprocessing_instance_file(instance_file)
         self.layout_file_name = instance_file["layout_file"].split("/")[-1].split(".")[0]
         self.fill_level = instance_file["fill_level"]
-        self.max_priority = instance_file["max_priority"]
+        self.max_priority = instance_file.get("max_priority", None)  
         self.height = instance_file["height"]
         self.seed = instance_file["seed"]
         self.fleet_size = instance_file["fleet_size"]
@@ -39,6 +39,7 @@ class InstanceLoader():
         # Time window related variables
         if self.max_priority == 0: 
             self.unit_loads = instance_file["unit_loads"]
+            self._assign_priorities()
             
     def __str__(self): 
         return str({
@@ -157,3 +158,16 @@ class InstanceLoader():
 
     def get_handling_time(self): 
         return self.handling_time
+    
+    def _assign_priorities(self):
+        """Assigns priorities to unit loads based on their due dates (retrieval_end)."""
+        # Sort unit loads by their due date (earliest first)
+        sorted_uls = sorted(self.unit_loads, key=lambda ul: ul['retrieval_end'])
+        
+        # Assign priority based on sorted order
+        for i, ul_data in enumerate(sorted_uls):
+            # Find the corresponding unit load object and set its priority
+            for ul_obj in self.unit_loads:
+                if ul_obj['id'] == ul_data['id']:
+                    ul_obj['priority'] = i + 1  # Priority 1 is the highest
+                    break

@@ -123,7 +123,7 @@ def check_instance(instance, solution, change=False, verbose=False):
         if change:
             decisions = change_decisions(decisions)
         solution = create_solution(decisions)
-        testcase = TestCaseBrr(instance=instance, variant="dynamic_multiple", solution=solution, verbose=verbose, check_solution=True)
+        testcase = TestCaseBrr(instance=instance, variant="dynamic_multiple", solution=solution, verbose=verbose, mode="check")
         status = testcase.check_solution()
         print(status)
     except Exception as e:
@@ -143,11 +143,15 @@ if __name__ == "__main__":
         raise ValueError("The solution file must be a json file")
     try: 
         instance_path = solution_path.replace("resultsBRR", "inputsBRR")
+        # Remove _heuristic suffix if present
+        instance_path = instance_path.replace("_heuristic.json", ".json")
         instanceLoader = InstanceLoader(instance_path)
         instance = Instance(instanceLoader=instanceLoader)
     except FileNotFoundError as e:
         try: 
             instance_path = solution_path.replace("resultsBRR", "inputsBRR")
+            # Remove _heuristic suffix and fleet_size directory
+            instance_path = instance_path.replace("_heuristic.json", ".json")
             instance_path = re.sub(r"fleet_size_\d+/", "", instance_path)
             instanceLoader = InstanceLoader(instance_path)
             instance = Instance(instanceLoader=instanceLoader)

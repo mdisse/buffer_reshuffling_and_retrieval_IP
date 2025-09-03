@@ -3,7 +3,7 @@ import os
 wd = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(wd, '../..'))
 
-from src.bay.warehouse import Warehouse
+from src.bay.buffer import Buffer
 from src.instance.instance_loader import InstanceLoader
 from src.examples_gen.unit_load import UnitLoad
 from src.examples_gen.unit_load_gen import UnitLoadGenerator
@@ -53,7 +53,7 @@ class Instance():
             self.fleet_size = instanceLoader.get_fleet_size()
             self.vehicle_speed = instanceLoader.get_vehicle_speed()
             self.handling_time = instanceLoader.get_handling_time()
-            self._build_warehouse()
+            self._build_buffer()
             self.unit_loads = []
             self._populate_slots(instanceLoader=instanceLoader)
             self.rs_max = instanceLoader.get_rs_max()
@@ -66,7 +66,7 @@ class Instance():
             self.height = height
             self.seed = seed
             self.access_directions = access_directions
-            self._build_warehouse()
+            self._build_buffer()
             self.sink = self.wh_initial.has_sinks()
             self.source = self.wh_initial.has_sources()
             self.fleet_size = fleet_size
@@ -108,13 +108,13 @@ class Instance():
         })
 
     
-    def _build_warehouse(self):
-        self.wh_initial = Warehouse(self.layout_file, self.access_directions) 
-        self.wh_reshuffled = Warehouse(self.layout_file, self.access_directions) 
+    def _build_buffer(self):
+        self.wh_initial = Buffer(self.layout_file, self.access_directions) 
+        self.wh_reshuffled = Buffer(self.layout_file, self.access_directions) 
 
     def _populate_slots(self, instanceLoader: InstanceLoader=None, exampleGenerator=None): 
         if instanceLoader is None and exampleGenerator is None: 
-            print("Error: Warehouse could not be populated. Either pass an instanceLoader or \n exampleGenerator to the Instance Constructor.")
+            print("Error: Buffer could not be populated. Either pass an instanceLoader or \n exampleGenerator to the Instance Constructor.")
             sys.exit(1)
         if instanceLoader is not None: 
             if instanceLoader.get_unit_loads(): 
@@ -199,7 +199,7 @@ class Instance():
     def has_source(self):
         return self.source
 
-    def get_warehouse(self): 
+    def get_buffer(self): 
         return self.wh_initial
     
     def get_vehicles(self): 
@@ -226,6 +226,13 @@ class Instance():
 
     def get_unit_loads(self):
         return self.unit_loads
+
+    def set_unit_loads(self, unit_loads):
+        """
+        Updates the list of unit loads for this instance.
+        This is used to inject prioritized unit loads before solving.
+        """
+        self.unit_loads = unit_loads
 
     def get_hash(self, path):
         return hash_instance(path)
@@ -293,6 +300,47 @@ class Instance():
         f = open(filename, 'w')
         json.dump(data, f, indent=4)
         f.close()
+
+    def calculate_distance(self, lane1, tier1, lane2, tier2): 
+        """
+        Calculates the distance between two lanes
+        Each tier moved adds 1 to the distance
+        """
+        if isinstance(lane1, str):
+            if lane1 == "sink":
+                if isinstance(lane2, str) and lane2 == "source":
+                    lane_distance = self.get_buffer().get_distance_source_to_sink()
+                else:
+                    # Distance from sink to lane2
+                    lane_distance = self.get_buffer().get_distance_sink(lane2)
+            elif lane1 == "source":
+                if isinstance(lane2, str) and lane2 == "sink":
+                    lane_distance = self.get_buffer().get_distance_source_to_sink()
+                else:
+                    # Distance from source to lane2
+                    lane_distance = self.get_buffer().get_distance_source(lane2)
+            else:
+                raise ValueError(f"Unknown string location for lane1: {lane1}")
+        elif isinstance(lane2, str):
+            if lane2 == "sink": 
+                lane_distance = self.get_buffer().get_distance_sink(lane1)
+            elif lane2 == "source": 
+                lane_distance = self.get_buffer().get_distance_source(lane1)
+            else:
+                raise ValueError(f"Unknown string location for lane2: {lane2}")
+        else: 
+            lane_distance = self.get_buffer().get_distance_lanes(lane1, lane2)
+
+        if tier1 is None or tier1 == 1: 
+            t1 = 1
+        else: 
+            t1 = tier1.get_id()
+        if tier2 is None or tier2 == 1:
+            t2 = 1
+        else: 
+            t2 = tier2.get_id()
+        tier_distance = t1-1 + t2-1
+        return lane_distance + tier_distance
 
 
 if __name__ == '__main__': 

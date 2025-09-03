@@ -15,7 +15,6 @@ import gurobipy as gp
 
 def create_paths(instance):
     file = instance.get_filename()
-    fill_level = instance.get_fill_level()
     unit_loads = len(instance.get_unit_loads())
     access_directions = instance.get_access_directions()
     rs_max = instance.get_rs_max()
@@ -55,12 +54,10 @@ def create_paths(instance):
     return input_path, result_path, hash_path, feasibility_path # Return the new path
 
 
-# TODO: parameteroptimization 
 def generate_instances():
     files = [
-        # 'Size_3x3_Layout_2x2_sink_source',
         'Size_3x3_Layout_1x1_sink_source',
-        # 'Size_4x4_Layout_1x1_sink_source',
+        'Size_4x4_Layout_1x1_sink_source',
         # 'Size_5x5_Layout_1x1_sink_source',
         # 'Size_6x6_Layout_1x1_sink_source',
         # 'Size_7x7_Layout_1x1_sink_source',
@@ -75,21 +72,19 @@ def generate_instances():
     ]
     ad = [
         {"north" : True, "east" : True, "south" : True, "west" : True},
-        # {"north" : False, "east" : False, "south" : True, "west" : False},
-        # {"north" : False, "east" : False, "south" : True, "west" : True},
-        # {"north" : False, "east" : True, "south" : True, "west" : False}, 
-        # {"north" : True, "east" : False, "south" : True, "west" : False}, 
+        {"north" : False, "east" : False, "south" : True, "west" : False},
+        {"north" : False, "east" : True, "south" : True, "west" : False}, 
+        {"north" : True, "east" : False, "south" : True, "west" : False}, 
     ]
-    # seeds = [i for i in range(10)]
-    seeds = [1]
-    # fill_levels = [i/10 for i in range(5, 11)]
-    fill_levels = [0.1]
+    seeds = [i for i in range(10)]
+    fill_levels = [i/10 for i in range(5, 15)]
+    # fill_levels = [0.3]
     # time_window_lengths = [i for i in range(30, 61, 10)]
-    time_window_lengths = [30]
+    time_window_lengths = [40]
     vehicle_speeds = [1]
-    fleet_sizes = [1]
-    rs_maxes = [100]
-    as_max = 50
+    fleet_sizes = [1, 2, 3]
+    rs_maxes = [200]
+    as_max = 150
     for file in files: 
         for time_window_length in time_window_lengths:
             for vehicle_speed in vehicle_speeds:
@@ -116,7 +111,7 @@ def generate_instances():
                                     yield instance
 
 
-def solve_instance(instance, input_path, result_path, hash_path, feasibility_path, verbose): # Add feasibility_path
+def solve_instance(instance, input_path, result_path, hash_path, feasibility_path, verbose, generate_only=False, force_resolve=False): # Add force_resolve parameter
     """Solves a single instance, handling potential Gurobi errors."""
 
     instance_path = f"{input_path}{instance.get_seed()}.json"
@@ -124,11 +119,32 @@ def solve_instance(instance, input_path, result_path, hash_path, feasibility_pat
     feasibility_file_path = f"{feasibility_path}{instance.get_seed()}.json" # Path for the feasibility json
     instance.save_instance(instance_path)
 
-    if not instance.check_if_solved(hash_path, instance_path):
+    # Check if result file already exists and is valid (unless force_resolve is True)
+    result_already_exists = False
+    if not force_resolve and os.path.exists(result_file_path):
+        # Verify it's a valid result file by checking if it contains Gurobi results
+        try:
+            with open(result_file_path, 'r') as f:
+                result_data = json.load(f)
+                has_results = 'results' in result_data and result_data['results']
+                if has_results:
+                    print(f"Instance {instance.get_seed()} already solved. Result file exists: {os.path.basename(result_file_path)}")
+                    return  # Skip solving this instance
+                else:
+                    print(f"Result file exists but appears incomplete for instance {instance.get_seed()}. Re-solving...")
+        except (json.JSONDecodeError, IOError):
+            print(f"Result file exists but is corrupted for instance {instance.get_seed()}. Re-solving...")
+    elif force_resolve and os.path.exists(result_file_path):
+        print(f"Force re-solve enabled. Re-solving instance {instance.get_seed()} despite existing result file.")
+
+    # Also check the legacy hash-based method as fallback (unless force_resolve is True)
+    hash_check_solved = not force_resolve and instance.check_if_solved(hash_path, instance_path)
+    
+    if not result_already_exists and not hash_check_solved and not generate_only:
         print("Solving instance: ", instance)
         feasibility_status = {} # Initialize feasibility status dict
         try:
-            test_case = TestCaseBrr(instance=instance, variant="dynamic_multiple", verbose=verbose)
+            test_case = TestCaseBrr(instance=instance, variant="dynamic_multiple", verbose=verbose, mode="solve")
             is_feasible = test_case.feasible # Store feasibility
             feasibility_status = {'feasible': is_feasible} # Set status
 
@@ -158,7 +174,12 @@ def solve_instance(instance, input_path, result_path, hash_path, feasibility_pat
             # Add any other cleanup code here if necessary
             pass
     else:
-        print("Instance already solved. Skipping.")
+        if result_already_exists:
+            print(f"Instance {instance.get_seed()} already solved. Skipping.")
+        elif hash_check_solved:
+            print(f"Instance {instance.get_seed()} marked as solved in hash. Skipping.")
+        else:
+            print(f"Instance {instance.get_seed()} skipped (generate-only mode).")
         # Optionally, you could still check if the feasibility file exists and create it
         # if needed, based on the hash file content, but the current logic skips entirely.
 
@@ -172,10 +193,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--instance", type=str, help="Path to the instance json file")
     parser.add_argument("--verbose", action="store_true", help="Prints the results of the model")
-    parser.add_argument("--check-existing", action="store_true", help="Check existing instances in inputsBRR instead of generating new ones") # Add this flag
+    parser.add_argument("--check-existing", action="store_true", help="Check existing instances in inputsBRR instead of generating new ones") 
+    parser.add_argument("--generate-only", action="store_true", default=False, help="Generate new instances without solving them")
+    parser.add_argument("--force-resolve", action="store_true", default=False, help="Force re-solving even if result files already exist")
     args = parser.parse_args()
+
     verbose = args.verbose
     instances = [] # Initialize instances list
+    generate_only = args.generate_only
+    force_resolve = args.force_resolve
+
+    if args.generate_only:
+        print("Running in instance generation mode only. Solver will be skipped.")
+    
+    if force_resolve:
+        print("Force re-solve mode enabled. Will re-solve instances even if result files exist.")
 
     if args.instance:
         print(f"Loading specific instance: {args.instance}")
@@ -235,8 +267,8 @@ if __name__ == "__main__":
         try:
             # Unpack the new feasibility_path
             input_path, result_path, hash_path, feasibility_path = create_paths(instance)
-            # Pass feasibility_path to the solve function
-            solve_instance(instance, input_path, result_path, hash_path, feasibility_path, verbose)
+            # Pass feasibility_path and force_resolve to the solve function
+            solve_instance(instance, input_path, result_path, hash_path, feasibility_path, verbose, generate_only, force_resolve)
         except Exception as e:
             # Catch potential errors during path creation or solving for a specific instance
             print(f"Error processing instance with seed {instance.get_seed()}: {e}")

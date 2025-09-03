@@ -1,6 +1,6 @@
 class AutonomousMobileRobot(object):
     '''
-    Abstract class for mobile robots.
+    Abstract class for mobile AMRs.
 
     Parameters:
 #       last moves
@@ -13,10 +13,10 @@ class AutonomousMobileRobot(object):
     def get_executet_moves(self):
         return len(self._last_moves)
 
-    def get_robot_move_history(self):
+    def get_AMR_move_history(self):
         return self._last_moves
 
-    def move_robot(self, move, distance):
+    def move_AMR(self, move, distance):
         raise NotImplementedError('Please Implement this method')
 
     def idle_step(self):

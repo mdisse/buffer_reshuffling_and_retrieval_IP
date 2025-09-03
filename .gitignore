@@ -175,3 +175,8 @@ experiments/*
 
 
 
+nohup.out
+temp.py
+experiment_analysis
+debug_*
+nohup*
