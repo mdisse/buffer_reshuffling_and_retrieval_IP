@@ -13,7 +13,7 @@ from src.examples_gen.rand_lane_gen import RandLaneGen
 class LanedStackGenUnique:
     def __init__(self, max_priority : int, seed : int):
         """
-        Creates a generator for filling a warehouse
+        Creates a generator for filling a buffer
         
         Arguments:
         max_priority (int): number of priorities
@@ -75,7 +75,7 @@ class LanedStackGenUnique:
         return []
 
 if __name__ == '__main__': 
-    from src.bay.warehouse import Warehouse
+    from src.bay.buffer import Buffer
     layout_file = "examples/Size_3x3_Layout_1x1.csv"
     access_directions = {
         "north": True,
@@ -83,7 +83,7 @@ if __name__ == '__main__':
         "south": True,
         "west": True
     }
-    wh = Warehouse(layout_file, access_directions)
+    wh = Buffer(layout_file, access_directions)
     max_p = 5
     seed = 1
     height = 1

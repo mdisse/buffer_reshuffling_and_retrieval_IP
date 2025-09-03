@@ -7,12 +7,11 @@ import os
 import re
 import argparse
 import math
-import imageio # For creating GIFs. Ensure this package is installed in your environment.
+import imageio.v2 as imageio # For creating GIFs. Ensure this package is installed in your environment.
 import copy # For deep copying data structures
 import matplotlib.patheffects as pe # For text outlines
 from matplotlib import cm # Ensure cm is imported
 
-# ...existing code...
 # matplotlib.use('TkAgg') # Make sure this is commented out if using Agg backend
 
 MAX_URGENCY_WINDOW_DEFAULT = 30 # Default window for urgency coloring
@@ -161,21 +160,6 @@ def process_file(file):
 
     def plot_warehouse(time_step, amr_positions, ul_positions, ul_retrieval_times_map_func_arg, max_urgency_window_func_arg, decision_texts=None, initial_state=False):
         plt.figure()
-        # Get bays - init_dict is now populated globally, so this loop for init_dict is removed.
-        # The init_dict was populated here:
-        # for bay, config in bays.items():
-        #     slots = []
-        #     size = int(bay[:1])
-        #     pattern = r"row (\d+), column (\d+)"
-        #     match = re.search(pattern, bay)
-        #     if match:
-        #         col = int(match.group(1))
-        #         row = int(match.group(2))
-        #     for i in range(size):
-        #         for j in range(size):
-        #             slots.append((col + i, row + j))
-        #     init_uls = [num for sublist in config for innerlist in sublist for num in innerlist]
-        #     init_dict.update(zip(slots, init_uls))
 
         virtual_lanes = {} # Initialize virtual_lanes here
         if color_vls: # Populate if color_vls is true
@@ -381,15 +365,15 @@ def process_file(file):
 
     amr_positions = {f"v{i+1}": sink_position for i in range(data['fleet_size'])}
     
-    # Remove old ul_positions initialization block that depended on an empty init_dict
-    # ul_positions = {}
-    # for bay, config in bays.items():
-    #     ...
-    #     ul_id = init_dict.get((col + i, row + j)) # This init_dict was empty
-    # ...
-
-    # Create subdirectory if it doesn't exist
+    # Create subdirectory, removing old one if it exists
     output_dir = os.path.join(os.path.dirname(file), os.path.basename(file).split('.')[0])
+    
+    # Clean up old visualization directory
+    if os.path.exists(output_dir) and os.path.isdir(output_dir):
+        import shutil
+        shutil.rmtree(output_dir)
+        print(f"🗑️  Cleaned up old visualization directory: {os.path.basename(output_dir)}")
+    
     os.makedirs(output_dir, exist_ok=True)
 
     # Plot initial state (initial_state.png)
@@ -402,8 +386,6 @@ def process_file(file):
     plot_warehouse(0, {}, initial_ul_positions, ul_retrieval_times_map, max_urgency_window, initial_state=True)
 
     # Populate ul_positions for 0.png and subsequent simulation steps
-    # This will be the main ul_positions dictionary, modified by decisions
-    # Keys are (global_x, global_y)
     ul_positions = {}
     for (global_y, global_x), ul_id in init_dict.items():
         if ul_id != 0:
@@ -517,7 +499,6 @@ def process_file(file):
                     "decision_texts": current_decisions.copy()
                 })
 
-    # --- Subplot Generation Logic ---
     if target_subplot_timesteps and subplot_frames_data:
         # Sort frames by timestep just in case they were added out of order (e.g. t=0)
         subplot_frames_data.sort(key=lambda x: x["time_step"])
@@ -532,11 +513,6 @@ def process_file(file):
             rows = math.ceil(math.sqrt(num_plots)) # Aim for a layout that's taller or square
             cols = math.ceil(num_plots / rows)
             
-            # New wider layout (e.g., for 6 plots, try 2 rows, 3 cols):
-            # Prioritize more columns than rows, or square.
-            # cols = math.ceil(math.sqrt(num_plots)) 
-            # rows = math.ceil(num_plots / cols) # num_plots > 0, so cols >= 1, rows >= 1
-
             # Adjust figsize based on the new layout
             fig_width_per_subplot = 6  # Inches per subplot
             fig_height_per_subplot = 5 # Inches per subplot
@@ -590,7 +566,6 @@ def process_file(file):
             plt.savefig(subplot_filename, dpi=300)
             plt.close(fig) # Close the subplot figure
             print(f"Saved subplot figure to {subplot_filename}")
-    # --- End of Subplot Generation Logic ---
 
     # Create a video from the images
     images = []
@@ -608,143 +583,16 @@ def process_file(file):
         print(f"No individual step images found in {output_dir} to create a GIF.")
     # If only subplots were created, the GIF part is skipped, which is fine.
 
-# --- Definition of plot_warehouse_to_ax ---
-def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions, 
-                         data_func_arg, warehouse, colors, vl_colors, color_vls, source, debug, legend, 
-                         ul_retrieval_times_map_func_arg, max_urgency_window_func_arg, # Added params
+def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
+                         data_func_arg, warehouse, colors, vl_colors, color_vls, source, debug, legend,
+                         ul_retrieval_times_map_func_arg, max_urgency_window_func_arg,
                          decision_texts=None, initial_state=False, show_legend_in_subplot=True):
-    """Plots the warehouse state onto a given Matplotlib Axes object.
-       This is a copy of plot_warehouse, adapted for subplots.
-       It does NOT change any visual aspects of the original plot_warehouse.
-    """
-    # ax.clear() # Removed: Clear the specific subplot axis for redrawing
+    """Plots the warehouse state onto a given Matplotlib Axes object."""
+    bays = data_func_arg["initial_state"]
 
-    # --- Start of code copied and adapted from plot_warehouse ---
-    # Variables like bays, virtual_lanes, get_color are defined locally as in plot_warehouse
-    bays = data_func_arg["initial_state"] 
-
-    # Define virtual_lanes for plot_warehouse_to_ax (copied from plot_warehouse)
-    virtual_lanes = {} 
-    if color_vls and not initial_state: # Logic for virtual lanes coloring
-        # This complex logic for virtual_lanes should be identical to plot_warehouse
-        # For brevity, assuming it's correctly replicated if needed here.
-        # Simplified for this snippet, ensure full logic is present in actual code if color_vls is True
-        pass # Placeholder for the full virtual_lanes population logic from plot_warehouse
-
-    def get_color_for_ax(row, col): # Renamed to avoid conflict if plot_warehouse's get_color is in wider scope
-        # For initial_state, do not color virtual lanes, use default slot color
-        if color_vls and warehouse[row, col] == 1 and not initial_state:
-            vl_info = virtual_lanes.get((col, row)) # Ensure virtual_lanes is populated for this function
-            if vl_info:
-                return vl_colors.get(vl_info["access_direction"], 'white')
-            else:
-                return 'white' 
-        else:
-            try:
-                return colors[warehouse[row, col]]
-            except KeyError:
-                if warehouse[row, col] == 3: 
-                        raise KeyError(f"This instance file contains a source, please use this script without the --no-source flag")
-                else:
-                        return 'gray'
-
-    # Color cells for ax
-    for row_idx in range(warehouse.shape[0]):
-        for col_idx in range(warehouse.shape[1]):
-            if debug:
-                ax.text(col_idx + 0.5, row_idx + 0.5, f"{(row_idx, col_idx)}", color='black', ha='center', va='center', fontsize=5) # Smaller font for subplots
-            cell_color = get_color_for_ax(row_idx, col_idx) # Use the ax-specific get_color
-            ax.add_patch(plt.Rectangle((col_idx, row_idx), 1, 1, color=cell_color))
-
-    # Bay borders for ax
-    linewidth = 0.025
-    for bay, config in bays.items():
-        size = int(bay[:1])
-        pattern = r"row (\d+), column (\d+)"
-        match = re.search(pattern, bay)
-        if match:
-            row_coord = int(match.group(1))
-            col_coord = int(match.group(2))
-            ax.add_patch(plt.Rectangle((col_coord, row_coord), size, linewidth, color='black'))
-            ax.add_patch(plt.Rectangle((col_coord, row_coord + size - linewidth), size, linewidth, color='black'))
-            ax.add_patch(plt.Rectangle((col_coord, row_coord), linewidth, size, color='black'))
-            ax.add_patch(plt.Rectangle((col_coord + size - linewidth, row_coord), linewidth, size, color='black'))
-            
-    # Access points for ax (simplified, ensure full logic from plot_warehouse is adapted)
-    access_points_data = data_func_arg['access_points'] # Use data_func_arg
-    # ... (full AP plotting logic adapted for ax) ...
-    if not initial_state:
-        # Simplified AP plotting for ax - ensure this matches plot_warehouse logic if detailed APs are needed
-        for ap_config in access_points_data: # Example loop
-            # Adapt coordinates and plotting for ax
-            # ax.add_patch(plt.Circle(...))
-            # ax.text(...)
-            pass # Placeholder for full AP logic
-
-    # Plot unit loads for ax
-    for (x, y), ul_ids in ul_positions.items():
-        if ul_ids:  # Check if the list is not empty
-            if ul_ids[0] is not None and ul_ids[0] != 0: # Ensure there's a UL and it's not '0'
-                ul_id = ul_ids[0]  # Visualize the top unit load
-                
-                current_ul_color = get_ul_color(ul_id, time_step, ul_retrieval_times_map_func_arg, max_urgency_window_func_arg)
-                
-                ax.add_patch(plt.Rectangle((x + 0.2, y + 0.2), 0.6, 0.6, color=current_ul_color))
-                ax.text(x + 0.5, y + 0.5, f"{ul_id:02d}", color='white', ha='center', va='center',
-                        path_effects=[pe.withStroke(linewidth=1, foreground='black')])
-
-    # Plot AMRs for ax
-    if not initial_state:
-        for amr_id, (amr_x, amr_y) in amr_positions.items(): # Renamed x,y to amr_x, amr_y to avoid conflict
-            amr_marker = plt.Circle((amr_x + 0.5, amr_y + 0.5), radius=0.3, facecolor='orange', edgecolor='black', linewidth=1.5, alpha=1.0)
-            ax.add_patch(amr_marker)
-            ax.text(amr_x + 0.5, amr_y + 1.0, amr_id, color='black', ha='center', va='center',
-                    path_effects=[pe.withStroke(linewidth=1, foreground='white')])
-
-    ax.set_xticks(np.arange(0, warehouse.shape[1] + 1, 1))
-    ax.tick_params(axis='x', top=True, bottom=False, labeltop=True, labelbottom=False, labelcolor='none') # Hide x-axis labels
-    ax.set_yticks(np.arange(0, warehouse.shape[0] + 1, 1))
-    ax.tick_params(axis='y', labelcolor='none') # Hide y-axis labels
-
-    ax.invert_yaxis()
-    ax.grid(True, color='black', linewidth=.5)
-    
-    if show_legend_in_subplot: # Control legend display per subplot
-        temp_legend = legend.copy()
-        if initial_state: # If it's the true initial state plot
-            if "ap" in temp_legend: del temp_legend["ap"]
-        
-        # Create legend handles carefully
-        legend_handles = [plt.Rectangle((0,0),1,1, color=colors[key]) for key in temp_legend if key in colors]
-        legend_labels = [temp_legend[key] for key in temp_legend if key in colors]
-
-        if legend_handles: # Only show legend if there's something to show
-             ax.legend(legend_handles, legend_labels, loc='center left', fontsize='small') # Adjusted fontsize
-
-    ax.axis('scaled')
-    ax.set_xlim(0, warehouse.shape[1])
-    ax.set_ylim(warehouse.shape[0], 0)
-
-    # Add timestep counter
-    if not initial_state:
-        ax.text(warehouse.shape[1] - 0.5, warehouse.shape[0] + 0.5, f"T: {time_step:03d}", # Shortened "Timestep"
-                fontsize=10, ha='right', va='bottom', color='black', # Adjusted fontsize
-                bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'),
-                path_effects=[pe.withStroke(linewidth=1, foreground='white')])
-
-    # Add decision text
-    if decision_texts:
-        for i, decision_text in enumerate(decision_texts):
-            # Ensure text fits, maybe shorten or use fewer lines
-            ax.text(0.5, warehouse.shape[0] + 0.5 + i * 0.4, f"{decision_text}", # Adjusted y offset and fontsize
-                    fontsize=8, ha='left', va='bottom', color='black', # Adjusted fontsize
-                    bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'),
-                    path_effects=[pe.withStroke(linewidth=1, foreground='white')])
-    # --- End of code copied and adapted from plot_warehouse ---
-
-    virtual_lanes = {} 
-    if color_vls: 
-        for bay in data_func_arg["bay_info"].values(): # Use data_func_arg
+    virtual_lanes = {}
+    if color_vls:
+        for bay in data_func_arg["bay_info"].values():
             coordinates = []
             for col in range(bay["length"]):
                 for row_val in range(bay["width"]):
@@ -770,7 +618,7 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
                         virtual_lanes[(x, y)]["ap_id"] = ap["ap_id"]
                         virtual_lanes[(x, y)]["access_direction"] = ap["direction"]
         additional_lanes = {}
-        for vl in list(virtual_lanes.keys()): 
+        for vl in list(virtual_lanes.keys()):
             ap_id = virtual_lanes[vl]["ap_id"]
             for lane in data_func_arg["virtual_lanes"]:
                 if lane["ap_id"] == ap_id:
@@ -794,21 +642,21 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
             if vl_info:
                 return vl_colors.get(vl_info["access_direction"], 'white')
             else:
-                return 'white' 
+                return 'white'
         else:
             try:
                 return colors[warehouse[row_val, col_val]]
             except KeyError:
-                if warehouse[row_val, col_val] == 3: 
+                if warehouse[row_val, col_val] == 3:
                      raise KeyError(f"This instance file contains a source, please use this script without the --no-source flag")
                 else:
-                     return 'gray' 
+                     return 'gray'
 
     # Color cells
     for row_idx in range(warehouse.shape[0]):
         for col_idx in range(warehouse.shape[1]):
             if debug:
-                ax.text(col_idx + 0.5, row_idx + 0.5, f"{(row_idx, col_idx)}", color='black', ha='center', va='center', fontsize=5) # Smaller font for subplots
+                ax.text(col_idx + 0.5, row_idx + 0.5, f"{(row_idx, col_idx)}", color='black', ha='center', va='center', fontsize=5)
             cell_color = get_color_ax(row_idx, col_idx)
             ax.add_patch(plt.Rectangle((col_idx, row_idx), 1, 1, color=cell_color))
 
@@ -816,7 +664,7 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
     linewidth = 0.025
     for bay, config in bays.items():
         size = int(bay[:1])
-        pattern = r"row (\\d+), column (\\d+)" # Escaped backslashes for string literal
+        pattern = r"row (\d+), column (\d+)"
         match = re.search(pattern, bay)
         if match:
             row_val = int(match.group(1))
@@ -829,19 +677,16 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
     # Plot access points
     access_points = data_func_arg['access_points']
     aps = [access_point['ap_id'] for access_point in access_points]
-    used_aps = []
-    for lane in data_func_arg['virtual_lanes']:
-        used_aps.append(lane['ap_id'])
+    used_aps = [lane['ap_id'] for lane in data_func_arg['virtual_lanes']]
     hide_aps = [ap for ap in aps if ap not in used_aps]
 
     source_aps = []
     if not source:
         try:
             source_aps = list(data_func_arg['source_info'].values())[0]['access_point_ids']
-        except:
-            source_aps = [] # Ensure it's a list even if source_info is missing/malformed
-    
-    # Filter access_points to plot
+        except (KeyError, IndexError):
+            source_aps = []
+
     access_points_to_plot = [ap for ap in access_points if ap["ap_id"] not in hide_aps]
 
     for access_point in access_points_to_plot:
@@ -864,49 +709,41 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
         if not initial_state:
             ap_marker = plt.Circle((x_coord, y_coord), radius=0.1, color='red')
             ax.add_patch(ap_marker)
-            ax.text(x_coord, y_coord, ap_id, color='white', ha='center', va='center', fontsize=6)
+            ax.text(x_coord, y_coord, ap_id, color='white', ha='center', va='center', fontsize=8) 
 
     # Plot unit loads
     for (x, y), ul_ids in ul_positions.items():
-        if ul_ids:  # Check if the list is not empty
-            if ul_ids[0] is not None and ul_ids[0] != 0: # Ensure there's a UL and it's not '0'
-                ul_id = ul_ids[0]  # Visualize the top unit load
-                
-                # Determine color based on urgency
-                current_ul_color = get_ul_color(ul_id, time_step, ul_retrieval_times_map_func_arg, max_urgency_window_func_arg)
-                
-                ax.add_patch(plt.Rectangle((x + 0.2, y + 0.2), 0.6, 0.6, color=current_ul_color))
-                ax.text(x + 0.5, y + 0.5, f"{ul_id:02d}", color='white', ha='center', va='center',
-                        fontsize=6, # Potentially smaller font for subplots
-                        path_effects=[pe.withStroke(linewidth=1, foreground='black')])
+        if ul_ids and ul_ids[0] is not None and ul_ids[0] != 0:
+            ul_id = ul_ids[0]
+            current_ul_color = get_ul_color(ul_id, time_step, ul_retrieval_times_map_func_arg, max_urgency_window_func_arg)
+            ax.add_patch(plt.Rectangle((x + 0.2, y + 0.2), 0.6, 0.6, color=current_ul_color))
+            ax.text(x + 0.5, y + 0.5, f"{ul_id:02d}", color='white', ha='center', va='center',
+                    fontsize=10, path_effects=[pe.withStroke(linewidth=1, foreground='black')]) 
 
     # Plot AMRs
     if not initial_state:
-        for amr_id, (amr_x, amr_y) in amr_positions.items(): # Renamed x,y to amr_x, amr_y to avoid conflict
+        for amr_id, (amr_x, amr_y) in amr_positions.items():
             amr_marker = plt.Circle((amr_x + 0.5, amr_y + 0.5), radius=0.3, facecolor='orange', edgecolor='black', linewidth=1.5, alpha=1.0)
             ax.add_patch(amr_marker)
-            ax.text(amr_x + 0.5, amr_y + 1.0, amr_id, color='black', ha='center', va='center', fontsize=6, # Smaller font
+            ax.text(amr_x + 0.5, amr_y + 1.0, amr_id, color='black', ha='center', va='center', fontsize=10, 
                     path_effects=[pe.withStroke(linewidth=1, foreground='white')])
 
     ax.set_xticks(np.arange(0, warehouse.shape[1] + 1, 1))
-    ax.tick_params(axis='x', top=True, bottom=False, labeltop=True, labelbottom=False, labelcolor='none') # Hide x-axis labels
+    ax.tick_params(axis='x', top=True, bottom=False, labeltop=True, labelbottom=False, labelcolor='none')
     ax.set_yticks(np.arange(0, warehouse.shape[0] + 1, 1))
-    ax.tick_params(axis='y', labelcolor='none') # Hide y-axis labels
+    ax.tick_params(axis='y', labelcolor='none')
 
     ax.invert_yaxis()
     ax.grid(True, color='black', linewidth=.5)
-    
-    if show_legend_in_subplot: # Control legend display per subplot
+
+    if show_legend_in_subplot:
         temp_legend = legend.copy()
-        if initial_state: # If it's the true initial state plot
+        if initial_state:
             if "ap" in temp_legend: del temp_legend["ap"]
-        
-        # Create legend handles carefully
         legend_handles = [plt.Rectangle((0,0),1,1, color=colors[key]) for key in temp_legend if key in colors]
         legend_labels = [temp_legend[key] for key in temp_legend if key in colors]
-
-        if legend_handles: # Only show legend if there's something to show
-             ax.legend(legend_handles, legend_labels, loc='center left', fontsize='small') # Adjusted fontsize
+        if legend_handles:
+             ax.legend(legend_handles, legend_labels, loc='center left', fontsize='small')
 
     ax.axis('scaled')
     ax.set_xlim(0, warehouse.shape[1])
@@ -914,20 +751,18 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
 
     # Add timestep counter
     if not initial_state:
-        ax.text(warehouse.shape[1] - 0.5, warehouse.shape[0] + 0.5, f"T: {time_step:03d}", # Shortened "Timestep"
-                fontsize=10, ha='right', va='bottom', color='black', # Adjusted fontsize
+        ax.text(warehouse.shape[1] - 0.5, warehouse.shape[0] + 0.5, f"T: {time_step:03d}",
+                fontsize=12, ha='right', va='bottom', color='black', 
                 bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'),
                 path_effects=[pe.withStroke(linewidth=1, foreground='white')])
 
     # Add decision text
     if decision_texts:
         for i, decision_text in enumerate(decision_texts):
-            # Ensure text fits, maybe shorten or use fewer lines
-            ax.text(0.5, warehouse.shape[0] + 0.5 + i * 0.4, f"{decision_text}", # Adjusted y offset and fontsize
-                    fontsize=8, ha='left', va='bottom', color='black', # Adjusted fontsize
+            ax.text(0.5, warehouse.shape[0] + 0.5 + i * 0.4, f"{decision_text}",
+                    fontsize=9, ha='left', va='bottom', color='black', 
                     bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'),
                     path_effects=[pe.withStroke(linewidth=1, foreground='white')])
-    # --- End of adapted code for plot_warehouse_to_ax ---
 
 if all_experiments:
     number = 0

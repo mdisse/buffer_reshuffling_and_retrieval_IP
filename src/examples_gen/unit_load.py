@@ -4,7 +4,10 @@ class UnitLoad():
                  retrieval_start: int=None, 
                  retrieval_end: int=None, 
                  arrival_start: int=None, 
-                 arrival_end: int=None): 
+                 arrival_end: int=None,
+                 storage_priority: int=None,
+                 retrieval_priority: int=None,
+                 is_mock: bool=False): 
         """
         In the variant without a source, the arrival_start and arrival_end are always None. 
         Time is modeled in discrete time steps as integers.
@@ -14,19 +17,37 @@ class UnitLoad():
         self.retrieval_end = retrieval_end
         self.arrival_start = arrival_start
         self.arrival_end = arrival_end
-        self.retrieved = False
-        # check if the unit load is already stored in the warehouse
-        if arrival_start is not None and arrival_start > 0:
-            self.stored = False
+        self.storage_priority = storage_priority
+        self.retrieval_priority = retrieval_priority
+        self.priority = None  # Active priority
+        self.due_date = retrieval_end
+        self.is_stored = False
+        self.is_at_sink = False
+
+                # check if the unit load is already stored in the buffer
+        if not is_mock:
+            # For real unit loads, we need to check the feasibility of the time windows
+            if arrival_end is not None and arrival_end > 0:
+                self.is_stored = False
+            else:
+                self.is_stored = True
+
+            self._feasibility_checks()
+            self._store_if_None()
         else:
-            self.stored = True
-            self.arrival_end = arrival_start
-        self._feasibility_checks()
-        self._store_if_None()
+            self.is_stored = False
+        
+        # Set initial priority after state is determined. This is important for when
+        # the unit load objects are created, as the priorities are not yet assigned.
+        # The priorities will be correctly assigned later in the A* solver.
+        if self.is_stored:
+            self.priority = self.retrieval_priority
+        else:
+            self.priority = self.storage_priority
 
 
     def __str__(self) -> str:
-        return f"UnitLoad {self.id}, retrieval: {self.retrieval_start} - {self.retrieval_end}, arrival: {self.arrival_start} - {self.arrival_end}"
+        return f"UnitLoad {self.id}, retrieval: {self.retrieval_start} - {self.retrieval_end}, arrival: {self.arrival_start} - {self.arrival_end}, storage_prio: {self.storage_priority}, retrieval_prio: {self.retrieval_priority}, active_prio: {self.priority}, stored: {self.is_stored}, at_sink: {self.is_at_sink}"
     
     def _feasibility_checks(self):
         if self.retrieval_start < 1: 
@@ -52,16 +73,17 @@ class UnitLoad():
             self.arrival_end = 0
         
     def retrieve(self): 
-        if self.stored is False:
+        if self.is_stored is False:
             raise ValueError("unit load must be stored to retrieve it")
-        self.retrieved = True
-        self.stored = False
+        self.is_at_sink = True
+        self.is_stored = False
 
     def store(self):
         if self.arrival_start is None:
             raise ValueError("arrival_start must be set to store the unit load")
-        self.retrieved = False
-        self.stored = True
+        self.is_at_sink = False
+        self.is_stored = True
+        self.priority = self.retrieval_priority
 
     def to_data_dict(self): 
         data = dict()
@@ -86,3 +108,40 @@ class UnitLoad():
     
     def get_arrival_end(self): 
         return self.arrival_end
+
+    def set_priority(self, priority: int): 
+        self.priority = priority
+
+    def set_retrieval_priority(self, priority: int):
+        self.retrieval_priority = priority
+
+    def set_storage_priority(self, priority: int):
+        self.storage_priority = priority 
+        """
+        Set the priority of the unit load. 
+        Priority is an integer where lower values indicate higher priority.
+        """
+        if priority < 1: 
+            raise ValueError("Priority must be greater than 0")
+        self.priority = priority
+    
+    def get_priority(self):
+        """
+        Get the priority of the unit load. 
+        If no priority is set, return None.
+        """
+        return self.priority 
+    
+    @property
+    def stored(self):
+        """
+        Alias for is_stored to maintain compatibility with existing code.
+        """
+        return self.is_stored
+    
+    @stored.setter
+    def stored(self, value):
+        """
+        Setter for stored property.
+        """
+        self.is_stored = value

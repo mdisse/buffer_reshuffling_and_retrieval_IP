@@ -18,7 +18,7 @@ class UnitLoadGenerator:
 
         Arguments:
         seed (int): seed for random generation
-        fill_level (float): approximate fill level of the warehouse
+        fill_level (float): approximate fill level of the buffer
         tw_length (int): approximate average length of the time windows
         rs_max (int): maximum retrieval start
         as_max (int): maximum arrival start
@@ -146,7 +146,7 @@ class UnitLoadGenerator:
         
 
 if __name__ == '__main__': 
-    from src.bay.warehouse import Warehouse
+    from src.bay.buffer import Buffer
     layout_file = "examples/Size_3x3_Layout_1x1_sink.csv"
     access_directions = {
         "north": True,
@@ -154,7 +154,7 @@ if __name__ == '__main__':
         "south": True,
         "west": True
     }
-    wh = Warehouse(layout_file, access_directions)
+    wh = Buffer(layout_file, access_directions)
     height = 1
     tw_length = 10
     fill_level = 0.5

@@ -2,13 +2,16 @@ import numpy as np
 from src.bay.tier import Tier
 
 class VirtualLane:
-    def __init__(self, stacks: np.ndarray=None, ap_id: int=None):
+    def __init__(self, stacks: np.ndarray=None, ap_id: int=None, is_source: bool=False, is_sink: bool=False):
         # 1D array of stacks
         # ordered from the edge to the centre of a bay
         self.stacks = stacks
         # Access point index in the list
         self.ap_id = ap_id
         self.tiers = []
+        # Flags to identify if this lane is a source or sink
+        self.is_source = is_source
+        self.is_sink = is_sink
 
     def __str__(self): 
         return str({
@@ -25,32 +28,57 @@ class VirtualLane:
     def add_load(self, priority: int):
         """
         Adds a load to the lane and returns a new lane.
+        Items must be stacked physically - can only place in a tier if all deeper tiers are occupied.
         """
         if not self.has_slots():
             raise Exception('The lane has no slots for new loads')
+        
+        # Find the first empty slot starting from the deepest (highest index) tier
+        # But ensure all deeper tiers are occupied for physical feasibility
         for i in range(len(self.stacks) - 1, -1, -1):
             if self.stacks[i] == 0:
-                new_lane = VirtualLane()
-                new_lane.ap_id = self.ap_id
-                new_lane.stacks = self.stacks.copy()
-                new_lane.stacks[i] = priority
-                return new_lane
+                # Check if all deeper tiers (higher indices) are occupied
+                all_deeper_occupied = True
+                for j in range(i + 1, len(self.stacks)):
+                    if self.stacks[j] == 0:
+                        all_deeper_occupied = False
+                        break
+                
+                if all_deeper_occupied:
+                    new_lane = VirtualLane()
+                    new_lane.ap_id = self.ap_id
+                    new_lane.is_source = self.is_source
+                    new_lane.is_sink = self.is_sink
+                    new_lane.stacks = self.stacks.copy()
+                    new_lane.stacks[i] = priority
+                    return new_lane
+        
+        # If we get here, no valid placement was found
+        raise Exception('No valid placement found - physical stacking constraints violated')
 
     def remove_load(self):
         """
-        Removes the highest load.
+        Removes the topmost accessible load (LIFO - Last In, First Out).
+        Can only remove items that are not blocked by other items in front of them.
         Returns the updated lane and removed load priority.
         """
+        # Find the first non-empty tier from the top (lowest index)
+        # This represents the item closest to the access point and thus accessible
         for i in range(len(self.stacks)):
             if self.stacks[i] != 0:
                 new_lane = VirtualLane()
                 new_lane.ap_id = self.ap_id
+                new_lane.is_source = self.is_source
+                new_lane.is_sink = self.is_sink
                 new_lane.stacks = self.stacks.copy()
+                removed_load = self.stacks[i]
                 new_lane.stacks[i] = 0
-                return new_lane, self.stacks[i]
+                return new_lane, removed_load
         raise Exception('The lane has no loads')
 
     def __eq__(self, other):
+        if not isinstance(other, VirtualLane):
+            return False
         return self.ap_id == other.ap_id and np.array_equal(self.stacks, other.stacks)
 
     def to_data_dict(self):
@@ -96,3 +124,22 @@ class VirtualLane:
                 self.tiers.append(Tier(id, self.stacks[i]))
             else : 
                 self.tiers.append(Tier(id, 0))
+
+    def is_sink_or_source(self) -> bool:
+        """
+        Returns True if this virtual lane is either a source or sink lane.
+        """
+        return self.is_source or self.is_sink
+
+    def is_empty(self):
+        """Checks if the virtual lane has no unit loads."""
+        return not self.has_loads()
+
+    def get_tier(self, tier_id: int) -> Tier:
+        """
+        Returns the tier object for the given tier ID.
+        If the tier does not exist, returns None.
+        """
+        if 0 < tier_id <= len(self.tiers):
+            return self.tiers[tier_id - 1]
+        return None

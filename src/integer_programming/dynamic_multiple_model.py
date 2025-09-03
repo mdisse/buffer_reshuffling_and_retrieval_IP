@@ -10,7 +10,7 @@ class DynamicMultipleModel:
         self.verbose = verbose
         self.model = gp.Model("BRR_Dynamic_Multiple_AMRs")
         self.model.setParam('TimeLimit', 3600)
-        self.model.setParam('Threads', 20)
+        self.model.setParam('Threads', 24)
         self.model.setParam('MIPGap', 0.05)
         # self.model.setParam('SolutionLimit', 1)
         self.model.setParam('Heuristics', 0.5)
@@ -23,7 +23,7 @@ class DynamicMultipleModel:
         self.model.setParam("OptimalityTol", 1e-8)
         self.Unit_loads = self.instance.unit_loads
         self.T = self._calculate_max_T() + 1
-        self.Lanes = self.instance.get_warehouse().get_virtual_lanes()
+        self.Lanes = self.instance.get_buffer().get_virtual_lanes()
         for lane in self.Lanes[1:-1]:   # reverse tiers as model uses them differently than the unit load gen creates them 
             lane.reverse_tiers()
         self.Vehicles = self.instance.get_vehicles()
@@ -70,7 +70,7 @@ class DynamicMultipleModel:
                         for j in i.get_tiers():
                             self.y_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t, v.get_id())] = self.model.addVar(vtype=gp.GRB.BINARY, name=f"y_i{i.get_ap_id()}_j{j.get_id()}_n{n.get_id()}_t{t}_v{v.get_id()}")
 
-        # g_{n,t}   if unit load n has been retrieved from the warehouse at time t' < t
+        # g_{n,t}   if unit load n has been retrieved from the buffer at time t' < t
         self.g_vars = {}
         for t in range(1, self.T):
             for n in self.Unit_loads:
@@ -85,7 +85,7 @@ class DynamicMultipleModel:
                         for j in i.get_tiers():
                             self.z_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t, v.get_id())] = self.model.addVar(vtype=gp.GRB.BINARY, name=f"z_i{i.get_ap_id()}_j{j.get_id()}_n{n.get_id()}_t{t}_v{v.get_id()}")
         
-        # s_{n,t}  if a unit load n has been stored in the warehouse at time t' < t
+        # s_{n,t}  if a unit load n has been stored in the buffer at time t' < t
         self.s_vars = {}
         for t in range(1, self.T):
             for n in self.Unit_loads:
@@ -271,7 +271,7 @@ class DynamicMultipleModel:
 
     def get_state(self, t=1): 
         """
-        Returns the state of the warehouse at time t
+        Returns the state of the buffer at time t
         """
         for lane in self.Lanes:
             print(lane)
@@ -363,23 +363,24 @@ class DynamicMultipleModel:
         Calculates the distance between two lanes
         Each tier moved adds 1 to the distance
         """
-        if isinstance(lane2, str):
-            if lane2 == "sink": 
-                lane_distance = self.instance.get_warehouse().get_distance_sink(lane1)
-            if lane2 == "source": 
-                lane_distance = self.instance.get_warehouse().get_distance_source(lane1)
-        else: 
-            lane_distance = self.instance.get_warehouse().get_distance_lanes(lane1, lane2)
-        if tier1 is None or tier1 == 1: 
-            t1 = 1
-        else: 
-            t1 = tier1.get_id()
-        if tier2 is None or tier2 == 1:
-            t2 = 1
-        else: 
-            t2 = tier2.get_id()
-        tier_distance = t1-1 + t2-1
-        return lane_distance + tier_distance
+        return self.instance.calculate_distance(lane1, tier1, lane2, tier2)
+        # if isinstance(lane2, str):
+            # if lane2 == "sink": 
+                # lane_distance = self.instance.get_buffer().get_distance_sink(lane1)
+            # if lane2 == "source": 
+                # lane_distance = self.instance.get_buffer().get_distance_source(lane1)
+        # else: 
+            # lane_distance = self.instance.get_buffer().get_distance_lanes(lane1, lane2)
+        # if tier1 is None or tier1 == 1: 
+            # t1 = 1
+        # else: 
+            # t1 = tier1.get_id()
+        # if tier2 is None or tier2 == 1:
+            # t2 = 1
+        # else: 
+            # t2 = tier2.get_id()
+        # tier_distance = t1-1 + t2-1
+        # return lane_distance + tier_distance
 
     def calculate_travel_time(self, lane1, tier1, lane2, tier2, handling_time=False): 
         """
