@@ -469,9 +469,10 @@ class DistanceCalculator:
 class HeuristicCalculator:
     """Calculates heuristic costs for A* search."""
     
-    def __init__(self, distance_calc: DistanceCalculator, fleet_size: int = 3):
+    def __init__(self, distance_calc: DistanceCalculator, fleet_size: int = 3, initial_stored_ids: Set[int] = None):
         self.distance_calc = distance_calc
         self.fleet_size = fleet_size
+        self.initial_stored_ids = initial_stored_ids if initial_stored_ids is not None else set()
         self._ap_cost_cache = {}
         self._all_retrieval_uls = None
         
@@ -804,8 +805,9 @@ class HeuristicCalculator:
         blocking_cost = self._calculate_blocking_cost(node.blocking_moves, node.empty_lanes)
         priority_penalty = self._calculate_priority_violation_penalty(node, source_ids, sink_ids)
         priority_blocking_penalty = self._calculate_priority_blocking_penalty(node, sink_ids)
+        premature_storage_penalty = self._calculate_premature_storage_penalty(node, sink_ids)
         
-        return storage_cost + retrieval_cost + blocking_cost + priority_penalty + priority_blocking_penalty
+        return storage_cost + retrieval_cost + blocking_cost + priority_penalty + priority_blocking_penalty + premature_storage_penalty
     
     def _calculate_priority_blocking_penalty(self, node: AStarNode, sink_ids: Set[int]) -> float:
         """
@@ -845,6 +847,56 @@ class HeuristicCalculator:
                         # Same or lower-priority UL is blocking higher/equal-priority UL
                         penalty += BLOCKING_PENALTY_FACTOR
         
+        return penalty
+
+    def _calculate_premature_storage_penalty(self, node: AStarNode, sink_ids: Set[int]) -> float:
+        """
+        Calculate penalty for storing low-priority unit loads when high-priority retrievals are pending.
+        
+        This penalizes states where we have performed a storage task (moving a UL from source to buffer)
+        for a lower-priority item, while a higher-priority item was available for retrieval in the buffer.
+        """
+        penalty = 0.0
+        PREMATURE_STORAGE_PENALTY_FACTOR = 50.0 * self.distance_calc.avg_buffer_to_sink
+        
+        # Identify newly stored unit loads (present in buffer but not in initial state)
+        current_stored_ids = node.stored_unit_loads
+        newly_stored_ids = current_stored_ids - self.initial_stored_ids
+        
+        if not newly_stored_ids:
+            return 0.0
+            
+        # Find the highest priority (lowest value) pending retrieval
+        # Pending retrievals are ULs in the buffer (stored) that are not yet at sink
+        pending_retrieval_ids = current_stored_ids - sink_ids
+        
+        if not pending_retrieval_ids:
+            return 0.0
+            
+        min_retrieval_priority = 999
+        
+        for ul_id in pending_retrieval_ids:
+            ul = node.unit_load_manager.get_ul_by_id(ul_id)
+            if ul and hasattr(ul, 'retrieval_priority') and ul.retrieval_priority < 900:
+                if ul.retrieval_priority < min_retrieval_priority:
+                    min_retrieval_priority = ul.retrieval_priority
+        
+        if min_retrieval_priority >= 900:
+            return 0.0
+            
+        # Check if any newly stored UL has lower priority (higher value) than the best pending retrieval
+        for ul_id in newly_stored_ids:
+            ul = node.unit_load_manager.get_ul_by_id(ul_id)
+            if not ul:
+                continue
+                
+            # Use storage priority because that was the priority when we decided to store it
+            storage_priority = getattr(ul, 'storage_priority', 999)
+            
+            if storage_priority < 900 and storage_priority > min_retrieval_priority:
+                # We stored a lower priority item (e.g. 5) while a higher priority item (e.g. 1) was waiting
+                penalty += PREMATURE_STORAGE_PENALTY_FACTOR
+                
         return penalty
 
 class AStarSolver:
@@ -892,7 +944,10 @@ class AStarSolver:
             fleet_size = instance.get_fleet_size()
         
         self.fleet_size = fleet_size  # Store for tabu tenure
-        self.heuristic_calc = HeuristicCalculator(self.distance_calc, fleet_size)
+        
+        # Get initial stored IDs for premature storage detection
+        initial_stored_ids = initial_buffer_state.get_all_stored_unit_loads()
+        self.heuristic_calc = HeuristicCalculator(self.distance_calc, fleet_size, initial_stored_ids)
         self.move_generator = MoveGenerator(self.distance_calc, self.config, self.unit_load_manager)
         
         if self.config.verbose:
@@ -1072,8 +1127,46 @@ class AStarSolver:
                           new_buffer_state, new_sources: List[UnitLoad], 
                           new_sinks: List[UnitLoad]) -> AStarNode:
         """Create a successor node."""
-        move_cost = self.distance_calc.calculate_move_cost(move_info)
-        new_time = current_node.current_time + move_cost
+        # Calculate deadhead travel time (time to reach the start of the task)
+        current_pos = current_node.vehicle_pos
+        if current_pos is None:
+            # Assume vehicle starts at source for the first move
+            current_pos = self.distance_calc.source_ap
+            
+        task_start_pos = None
+        if move_info.move_type == MOVE_TYPE_STORE:
+            task_start_pos = self.distance_calc.source_ap
+        elif move_info.move_type in [MOVE_TYPE_RETRIEVE, MOVE_TYPE_RESHUFFLE]:
+            task_start_pos = move_info.from_pos
+            
+        deadhead_time = 0
+        if current_pos != task_start_pos:
+            deadhead_time = self.distance_calc.dist_matrix[current_pos][task_start_pos]
+            
+        arrival_at_task = current_node.current_time + deadhead_time
+        
+        # Calculate waiting time for arrival windows (only for STORE tasks)
+        start_time = arrival_at_task
+        if move_info.move_type == MOVE_TYPE_STORE:
+            ul = self.unit_load_manager.get_ul_by_id(move_info.ul_id)
+            if ul and hasattr(ul, 'arrival_start'):
+                start_time = max(arrival_at_task, ul.arrival_start)
+        
+        # Calculate actual move duration
+        move_duration = self.distance_calc.calculate_move_cost(move_info)
+        
+        # For RETRIEVE tasks, check if we need to wait for retrieval window start
+        # The vehicle is occupied until the delivery can be made
+        if move_info.move_type == MOVE_TYPE_RETRIEVE:
+            ul = self.unit_load_manager.get_ul_by_id(move_info.ul_id)
+            arrival_at_sink = start_time + move_duration
+            if ul and hasattr(ul, 'retrieval_start'):
+                # Vehicle is busy until at least retrieval_start
+                new_time = max(arrival_at_sink, ul.retrieval_start)
+            else:
+                new_time = arrival_at_sink
+        else:
+            new_time = start_time + move_duration
         
         # Create new tabu list - carry over parent's tabu list and add new tabu positions
         new_tabu_list = list(current_node.tabu_list)  # Copy parent's tabu list
@@ -1117,7 +1210,7 @@ class AStarSolver:
             unit_loads_at_sinks=new_sinks,
             parent=current_node,
             move=move_info,
-            g_cost=current_node.g_cost + move_cost,
+            g_cost=current_node.g_cost + (new_time - current_node.current_time), # Cost is total time elapsed
             current_time=new_time,
             tabu_list=new_tabu_list,
             retrieval_sequence=new_retrieval_sequence
