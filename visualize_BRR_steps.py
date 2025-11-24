@@ -28,6 +28,8 @@ parser.add_argument('--debug', dest='debug', action='store_true')
 parser.set_defaults(debug=False)
 parser.add_argument('--subplot-timesteps', type=str, default="", help="Comma-separated list of timesteps to include in a combined subplot figure.") # Added argument
 parser.add_argument('--max_urgency_window', type=int, help='Maximum window (in time steps) for unit load retrieval urgency coloring. ULs with retrieval_end within this window from current_time_step will be colored with red-orange-yellow gradient based on urgency. ULs beyond this window will be light grey. ULs due or past due will be dark red.')
+parser.add_argument('--overwrite', dest='overwrite', action='store_true', help='Overwrite existing visualization directory if it exists.')
+parser.set_defaults(overwrite=False)
 args = parser.parse_args()
 source = args.source
 color_vls = args.color_vls
@@ -35,6 +37,7 @@ debug = args.debug
 all_experiments = args.all
 file = args.file
 subplot_timesteps_arg = args.subplot_timesteps
+overwrite = args.overwrite
 
 def get_ul_color(ul_id, current_time_step, ul_retrieval_times_map, max_urgency_window):
     """Calculates the color for a unit load based on its retrieval urgency.
@@ -141,20 +144,30 @@ def process_file(file):
                     init_dict[(global_y, global_x)] = ul_id_val
 
     def ap_id_to_coords(ap_id, slot):
-        """Converts an access point ID to its (x, y) coordinates.
-        Then check the length of the virtual lane and return the destination coordinates given
-        the direction of the access point and the slot number.
+        """Converts an access point ID and tier/slot to its (x, y) coordinates.
+        
+        Tier numbering: Tier 1 = BACK/DEEPEST, Tier N = FRONT/CLOSEST
+        The 'slot' parameter represents the tier number from decision strings like [11, 1].
+        For each direction, we calculate position based on total lane length.
         """
         vl_length = next((lane['n_slots'] for lane in data['virtual_lanes'] if lane['ap_id'] == ap_id), None)
         for ap in data['access_points']:
             if ap['ap_id'] == ap_id:
                 if ap['direction'] == 'north':
+                    # North: lane extends upward (increasing y), AP at bottom
+                    # Tier 1 (back) is farthest up, Tier N (front) is closest to AP
                     return ap['global_x'], ap['global_y'] + 1 + vl_length - slot
                 elif ap['direction'] == 'south':
+                    # South: lane extends downward (decreasing y), AP at top
+                    # Tier 1 (back) is farthest down, Tier N (front) is closest to AP
                     return ap['global_x'], ap['global_y'] - 1 - vl_length + slot
                 elif ap['direction'] == 'east':
+                    # East: lane extends leftward (decreasing x), AP at right
+                    # Tier 1 (back) is farthest left, Tier N (front) is closest to AP
                     return ap['global_x'] - 1 - vl_length + slot, ap['global_y']
                 elif ap['direction'] == 'west':
+                    # West: lane extends rightward (increasing x), AP at left
+                    # Tier 1 (back) is farthest right, Tier N (front) is closest to AP
                     return ap['global_x'] + 1 + vl_length - slot, ap['global_y']
         return None
 
@@ -368,11 +381,16 @@ def process_file(file):
     # Create subdirectory, removing old one if it exists
     output_dir = os.path.join(os.path.dirname(file), os.path.basename(file).split('.')[0])
     
-    # Clean up old visualization directory
+    # Check if visualization already exists
     if os.path.exists(output_dir) and os.path.isdir(output_dir):
-        import shutil
-        shutil.rmtree(output_dir)
-        print(f"🗑️  Cleaned up old visualization directory: {os.path.basename(output_dir)}")
+        if not overwrite:
+            print(f"⏭️  Skipping existing visualization: {os.path.basename(output_dir)}")
+            return
+        else:
+            # Clean up old visualization directory only if overwrite is True
+            import shutil
+            shutil.rmtree(output_dir)
+            print(f"🗑️  Cleaned up old visualization directory: {os.path.basename(output_dir)}")
     
     os.makedirs(output_dir, exist_ok=True)
 

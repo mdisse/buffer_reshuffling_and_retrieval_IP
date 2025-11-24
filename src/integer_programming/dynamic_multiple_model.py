@@ -5,22 +5,36 @@ from src.integer_programming.initial_config_constraints import *
 from math import ceil
 
 class DynamicMultipleModel:
-    def __init__(self, instance: Instance, decisions=False, verbose=False) -> None:
+    def __init__(self, instance: Instance, decisions=False, verbose=False, check_mode=False) -> None:
         self.instance = instance
         self.verbose = verbose
+        self.check_mode = check_mode
         self.model = gp.Model("BRR_Dynamic_Multiple_AMRs")
-        self.model.setParam('TimeLimit', 3600)
-        self.model.setParam('Threads', 24)
-        self.model.setParam('MIPGap', 0.05)
-        # self.model.setParam('SolutionLimit', 1)
-        self.model.setParam('Heuristics', 0.5)
-        self.model.setParam('BarHomogeneous', 1)
-        self.model.setParam('MIPFocus', 1)
-        self.model.setParam("NumericFocus", 3)  # High focus on numerical accuracy
-        self.model.setParam("ScaleFlag", 2)  # Aggressive scaling
-        self.model.setParam("ObjScale", 0.5)
-        self.model.setParam("FeasibilityTol", 1e-8)
-        self.model.setParam("OptimalityTol", 1e-8)
+        
+        # ONLY disable optimization when check_mode=True (for heuristic validation)
+        # Regular solve mode still uses all optimization parameters
+        if False:
+            # For check mode: disable presolve and limit iterations for fast feasibility check only
+            self.model.setParam('Presolve', 0)  # Disable presolve
+            self.model.setParam('TimeLimit', 10)  # Very short time limit
+            self.model.setParam('IterationLimit', 0)  # Don't optimize, just check constraints
+            self.model.setParam('FeasibilityTol', 1e-8)
+            self.model.setParam('OptimalityTol', 1e-8)
+        else:
+            # Normal optimization mode (for run_BRR_experiment.py)
+            self.model.setParam('TimeLimit', 3600)
+            # self.model.setParam('Threads', 20)
+            self.model.setParam('MIPGap', 0.05)
+            # self.model.setParam('SolutionLimit', 1)
+            self.model.setParam('Heuristics', 0.5)
+            self.model.setParam('BarHomogeneous', 1)
+            self.model.setParam('MIPFocus', 1)
+            self.model.setParam("NumericFocus", 3)  # High focus on numerical accuracy
+            self.model.setParam("ScaleFlag", 2)  # Aggressive scaling
+            self.model.setParam("ObjScale", 0.5)
+            self.model.setParam("FeasibilityTol", 1e-8)
+            self.model.setParam("OptimalityTol", 1e-8)
+            
         self.Unit_loads = self.instance.unit_loads
         self.T = self._calculate_max_T() + 1
         self.Lanes = self.instance.get_buffer().get_virtual_lanes()
@@ -182,6 +196,7 @@ class DynamicMultipleModel:
         stack_in_window_dm(self)
         stack_before_deadline_dm(self)
         one_vehicle_per_lane_dm(self)
+        lane_monopolization(self)
         lifo(self)
         # Initial configuration constraints
         vehicle_start_dm(self)
@@ -364,23 +379,6 @@ class DynamicMultipleModel:
         Each tier moved adds 1 to the distance
         """
         return self.instance.calculate_distance(lane1, tier1, lane2, tier2)
-        # if isinstance(lane2, str):
-            # if lane2 == "sink": 
-                # lane_distance = self.instance.get_buffer().get_distance_sink(lane1)
-            # if lane2 == "source": 
-                # lane_distance = self.instance.get_buffer().get_distance_source(lane1)
-        # else: 
-            # lane_distance = self.instance.get_buffer().get_distance_lanes(lane1, lane2)
-        # if tier1 is None or tier1 == 1: 
-            # t1 = 1
-        # else: 
-            # t1 = tier1.get_id()
-        # if tier2 is None or tier2 == 1:
-            # t2 = 1
-        # else: 
-            # t2 = tier2.get_id()
-        # tier_distance = t1-1 + t2-1
-        # return lane_distance + tier_distance
 
     def calculate_travel_time(self, lane1, tier1, lane2, tier2, handling_time=False): 
         """

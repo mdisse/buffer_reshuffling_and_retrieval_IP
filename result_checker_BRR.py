@@ -132,7 +132,7 @@ def check_instance(instance, solution, change=False, verbose=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Check the result of the BRR algorithm")
-    parser.add_argument("--solution_path", type=str, required=True, help="Path to the solution file")
+    parser.add_argument("--solution-path", type=str, required=True, help="Path to the solution file")
     args = parser.parse_args()
 
     if args.solution_path.endswith(".json"):

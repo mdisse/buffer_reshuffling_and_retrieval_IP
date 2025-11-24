@@ -180,3 +180,10 @@ temp.py
 experiment_analysis
 debug_*
 nohup*
+*.prof
+experiments_archive/
+heuristic_stats.txt
+archive/
+*.out
+test.sh
+model.lp

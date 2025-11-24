@@ -76,6 +76,23 @@ class VirtualLane:
                 return new_lane, removed_load
         raise Exception('The lane has no loads')
 
+    def remove_specific_load(self, ul_id):
+        """
+        Removes a specific unit load by ID, regardless of position.
+        This is used for reshuffling operations where we need to move a specific unit load.
+        Returns the updated lane and the removed load ID.
+        """
+        for i in range(len(self.stacks)):
+            if self.stacks[i] == ul_id:
+                new_lane = VirtualLane()
+                new_lane.ap_id = self.ap_id
+                new_lane.is_source = self.is_source
+                new_lane.is_sink = self.is_sink
+                new_lane.stacks = self.stacks.copy()
+                new_lane.stacks[i] = 0
+                return new_lane, ul_id
+        raise Exception(f'Unit load {ul_id} not found in lane {self.ap_id}')
+
     def __eq__(self, other):
         if not isinstance(other, VirtualLane):
             return False
@@ -143,3 +160,17 @@ class VirtualLane:
         if 0 < tier_id <= len(self.tiers):
             return self.tiers[tier_id - 1]
         return None
+
+    def copy(self):
+        """
+        Creates an efficient copy of the virtual lane.
+        Only copies the mutable state (stacks array).
+        """
+        new_lane = VirtualLane()
+        new_lane.ap_id = self.ap_id
+        new_lane.is_source = self.is_source
+        new_lane.is_sink = self.is_sink
+        new_lane.stacks = self.stacks.copy() if self.stacks is not None else None
+        # Don't copy tiers as they can be recreated if needed
+        new_lane.tiers = []
+        return new_lane

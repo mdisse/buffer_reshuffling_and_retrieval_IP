@@ -232,15 +232,10 @@ class StaticModel:
     
     def _calculate_distance(self, lane1, tier1, lane2, tier2): 
         """
-        Calculates the distance between two lanes
-        Can be modified to also consider the tiers of the slots
+        Calculates the distance between two lanes including tier depth.
+        Uses the instance's calculate_distance method for consistency.
         """
-        if isinstance(lane2, str):
-            if lane2 == "sink": 
-                return self.instance.get_buffer().get_distance_sink(lane1)
-            if lane2 == "source": 
-                return self.instance.get_buffer().get_distance_source(lane1)
-        return self.instance.get_buffer().get_distance_lanes(lane1, lane2)
+        return self.instance.calculate_distance(lane1, tier1, lane2, tier2)
 
     def calculate_travel_time(self, lane1, tier1, lane2, tier2): 
         """

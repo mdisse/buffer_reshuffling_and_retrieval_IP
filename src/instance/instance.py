@@ -303,19 +303,32 @@ class Instance():
 
     def calculate_distance(self, lane1, tier1, lane2, tier2): 
         """
-        Calculates the distance between two lanes
-        Each tier moved adds 1 to the distance
+        Calculates the distance between two lanes.
+        
+        Tier numbering: Tier 1 = BACK/DEEPEST, Tier N = FRONT/CLOSEST to access point
+        For a lane with n_slots:
+        - Tier 1 requires (n_slots - 1) moves to reach access point
+        - Tier n requires (n_slots - n) moves to reach access point
+        
+        Total distance = tier1_depth + lane_distance + tier2_depth
+        where tier_depth = n_slots - tier_number
         """
         if isinstance(lane1, str):
             if lane1 == "sink":
                 if isinstance(lane2, str) and lane2 == "source":
                     lane_distance = self.get_buffer().get_distance_source_to_sink()
+                elif isinstance(lane2, str) and lane2 == "sink":
+                    # Distance from sink to sink is 0
+                    lane_distance = 0
                 else:
                     # Distance from sink to lane2
                     lane_distance = self.get_buffer().get_distance_sink(lane2)
             elif lane1 == "source":
                 if isinstance(lane2, str) and lane2 == "sink":
                     lane_distance = self.get_buffer().get_distance_source_to_sink()
+                elif isinstance(lane2, str) and lane2 == "source":
+                    # Distance from source to source is 0
+                    lane_distance = 0
                 else:
                     # Distance from source to lane2
                     lane_distance = self.get_buffer().get_distance_source(lane2)
@@ -331,15 +344,38 @@ class Instance():
         else: 
             lane_distance = self.get_buffer().get_distance_lanes(lane1, lane2)
 
-        if tier1 is None or tier1 == 1: 
+        # Calculate tier depths (distance from tier to access point)
+        # Tier 1 = deepest, requires most moves to reach access point
+        # Handle both integer tier IDs and tier objects
+        if tier1 is None:
             t1 = 1
-        else: 
+        elif isinstance(tier1, int):
+            t1 = tier1
+        else:
             t1 = tier1.get_id()
-        if tier2 is None or tier2 == 1:
+            
+        if tier2 is None:
             t2 = 1
-        else: 
+        elif isinstance(tier2, int):
+            t2 = tier2
+        else:
             t2 = tier2.get_id()
-        tier_distance = t1-1 + t2-1
+        
+        # Get number of slots for each lane
+        # For source/sink or if lane is string, tier depth is 0
+        if isinstance(lane1, str):
+            tier1_depth = 0
+        else:
+            n_slots_lane1 = len(lane1.stacks) if hasattr(lane1, 'stacks') else len(lane1.get_tiers())
+            tier1_depth = n_slots_lane1 - t1
+        
+        if isinstance(lane2, str):
+            tier2_depth = 0
+        else:
+            n_slots_lane2 = len(lane2.stacks) if hasattr(lane2, 'stacks') else len(lane2.get_tiers())
+            tier2_depth = n_slots_lane2 - t2
+        
+        tier_distance = tier1_depth + tier2_depth
         return lane_distance + tier_distance
 
 

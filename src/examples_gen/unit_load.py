@@ -27,10 +27,11 @@ class UnitLoad():
                 # check if the unit load is already stored in the buffer
         if not is_mock:
             # For real unit loads, we need to check the feasibility of the time windows
-            if arrival_end is not None and arrival_end > 0:
-                self.is_stored = False
-            else:
+            if arrival_start is None or (arrival_end is not None and arrival_end <= 0):
+                # If arrival_start is None or arrival_end <= 0, the unit load is not stored
                 self.is_stored = True
+            else: 
+                self.is_stored = False
 
             self._feasibility_checks()
             self._store_if_None()
@@ -145,3 +146,24 @@ class UnitLoad():
         Setter for stored property.
         """
         self.is_stored = value
+
+    def copy(self):
+        """
+        Creates an efficient copy of the unit load with all its current state.
+        """
+        new_ul = UnitLoad(
+            id=self.id,
+            retrieval_start=self.retrieval_start,
+            retrieval_end=self.retrieval_end,
+            arrival_start=self.arrival_start,
+            arrival_end=self.arrival_end,
+            storage_priority=self.storage_priority,
+            retrieval_priority=self.retrieval_priority,
+            is_mock=True  # Skip feasibility checks for copies
+        )
+        # Copy current state
+        new_ul.priority = self.priority
+        new_ul.due_date = self.due_date
+        new_ul.is_stored = self.is_stored
+        new_ul.is_at_sink = self.is_at_sink
+        return new_ul

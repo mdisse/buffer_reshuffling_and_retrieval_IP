@@ -93,7 +93,7 @@ def one_move_per_vehicle_dm(m):
                         gp.quicksum(m.x_vars[(i.get_ap_id(), j.get_id(), k.get_ap_id(), l.get_id(), n.get_id(), t, v.get_id())] for k in m.Lanes[1:-1] for l in k.get_tiers() for n in m.Unit_loads) + 
                         gp.quicksum(m.e_vars[(i.get_ap_id(), j.get_id(), k.get_ap_id(), l.get_id(), t, v.get_id())] for k in m.Lanes for l in k.get_tiers()) + 
                         gp.quicksum(m.y_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t, v.get_id())] for n in m.Unit_loads)  
-                        == m.c_vars[(i.get_ap_id(), j.get_id(), t, v.get_id())], 
+                        <= m.c_vars[(i.get_ap_id(), j.get_id(), t, v.get_id())], 
                         name=constr_name)
 
 def one_move_per_vehicle_sink(m): 
@@ -115,7 +115,7 @@ def one_move_per_vehicle_sink_dm(m):
             constr_name = f"one_move_per_vehicle_sink_time{t}_vehicle{v.get_id()}"
             m.model.addConstr(
                 gp.quicksum(m.e_vars[(I.get_ap_id(), j.get_id(), k.get_ap_id(), l.get_id(), t, v.get_id())] for k in m.Lanes for l in k.get_tiers()) 
-                == m.c_vars[(I.get_ap_id(), j.get_id(), t, v.get_id())], 
+                <= m.c_vars[(I.get_ap_id(), j.get_id(), t, v.get_id())], 
                 name=constr_name)
 
 def one_move_per_vehicle_source_dm(m): 
@@ -128,7 +128,7 @@ def one_move_per_vehicle_source_dm(m):
             m.model.addConstr(
                 gp.quicksum(m.z_vars[(k.get_ap_id(), l.get_id(), n.get_id(), t, v.get_id())] for k in m.Lanes[1:-1] for l in k.get_tiers() for n in m.Unit_loads) +
                 gp.quicksum(m.y_vars[(source.get_ap_id(), s_tier.get_id(), n.get_id(), t, v.get_id())] for n in m.Unit_loads) +
-                gp.quicksum(m.e_vars[(source.get_ap_id(), s_tier.get_id(), k.get_ap_id(), l.get_id(), t, v.get_id())] for k in m.Lanes for l in k.get_tiers()) ==
+                gp.quicksum(m.e_vars[(source.get_ap_id(), s_tier.get_id(), k.get_ap_id(), l.get_id(), t, v.get_id())] for k in m.Lanes for l in k.get_tiers()) <=
                 m.c_vars[(source.get_ap_id(), s_tier.get_id(), t, v.get_id())],
                 name=constr_name)
             # print(f"{m.c_vars[(source.get_ap_id(), s_tier.get_id(), t, v.get_id())]} = {[m.z_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t, v.get_id())] for i in m.Lanes[1:-1] for j in i.get_tiers() for n in m.Unit_loads]}")
@@ -635,6 +635,117 @@ def one_vehicle_per_lane_dm(m):
             m.model.addConstr( 
                 gp.quicksum(m.c_vars[(i.get_ap_id(), j.get_id(), t, v.get_id())] for v in m.Vehicles for j in i.get_tiers()) <= 1, 
                     name=constr_name)
+
+def lane_monopolization(m): 
+    import math
+    # Ensures that for every lane and every time step, the lane is occupied by at most one vehicle
+    # Occupancy includes:
+    # 1. Stationary vehicle (c_vars)
+    # 2. Incoming vehicle (traveling in the lane)
+    # 3. Outgoing vehicle (traveling in the lane)
+    
+    h = m.instance.get_handling_time()
+    
+    for i in m.Lanes[1:-1]: # Buffer lanes only
+        J_i = len(i.get_tiers())
+        
+        # Pre-calculate travel times for each tier
+        tier_travel = {}
+        for j in i.get_tiers():
+            dist = max(0, J_i - j.get_id()) 
+            t_travel = math.ceil(dist / m.vehicle_speed)
+            tier_travel[j.get_id()] = t_travel
+
+        for t in range(1, m.T):
+            constr_name = f"lane_monopolization_lane{i.get_ap_id()}_time{t}"
+            
+            # 1. Stationary vehicles
+            stationary = gp.quicksum(m.c_vars[(i.get_ap_id(), j.get_id(), t, v.get_id())] 
+                                     for j in i.get_tiers() for v in m.Vehicles)
+            
+            incoming_terms = []
+            outgoing_terms = []
+
+            for j in i.get_tiers():
+                t_in = tier_travel[j.get_id()]
+                t_out = tier_travel[j.get_id()]
+                
+                # --- Incoming Moves ---
+                
+                # z (Store): Source -> i,j. Duration: t_in + h
+                duration = t_in + h
+                tt_z = m.calculate_travel_time(m.Lanes[0], m.Lanes[0].get_tiers()[0], i, j, False)
+                win_start = max(1, t - tt_z + 1)
+                win_end = min(m.T - 1, t + duration - tt_z)
+                
+                for v in m.Vehicles:
+                    for n in m.Unit_loads:
+                        for t_s in range(win_start, win_end + 1):
+                            if (i.get_ap_id(), j.get_id(), n.get_id(), t_s, v.get_id()) in m.z_vars:
+                                incoming_terms.append(m.z_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t_s, v.get_id())])
+
+                # x (Relocate To i,j): From k,l -> i,j. Duration: t_in + h
+                duration = t_in + h
+                for k in m.Lanes[1:-1]:
+                    for l in k.get_tiers():
+                        tt_x = m.calculate_travel_time(k, l, i, j, False)
+                        win_start = max(1, t - tt_x + 1)
+                        win_end = min(m.T - 1, t + duration - tt_x)
+                        for v in m.Vehicles:
+                            for n in m.Unit_loads:
+                                for t_s in range(win_start, win_end + 1):
+                                    if (k.get_ap_id(), l.get_id(), i.get_ap_id(), j.get_id(), n.get_id(), t_s, v.get_id()) in m.x_vars:
+                                        incoming_terms.append(m.x_vars[(k.get_ap_id(), l.get_id(), i.get_ap_id(), j.get_id(), n.get_id(), t_s, v.get_id())])
+
+                # e (Reposition To i,j): From k,l -> i,j. Duration: t_in
+                duration = t_in
+                for k in m.Lanes: 
+                    for l in k.get_tiers():
+                        tt_e = m.calculate_travel_time(k, l, i, j, False)
+                        win_start = max(1, t - tt_e + 1)
+                        win_end = min(m.T - 1, t + duration - tt_e)
+                        for v in m.Vehicles:
+                            for t_s in range(win_start, win_end + 1):
+                                if (k.get_ap_id(), l.get_id(), i.get_ap_id(), j.get_id(), t_s, v.get_id()) in m.e_vars:
+                                    incoming_terms.append(m.e_vars[(k.get_ap_id(), l.get_id(), i.get_ap_id(), j.get_id(), t_s, v.get_id())])
+
+                # --- Outgoing Moves ---
+                
+                # y (Retrieve): i,j -> Sink. Duration: h + t_out
+                duration = h + t_out
+                win_start = max(1, t - duration)
+                win_end = min(m.T - 1, t - 1)
+                
+                for v in m.Vehicles:
+                    for n in m.Unit_loads:
+                        for t_s in range(win_start, win_end + 1):
+                            if (i.get_ap_id(), j.get_id(), n.get_id(), t_s, v.get_id()) in m.y_vars:
+                                outgoing_terms.append(m.y_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t_s, v.get_id())])
+                                    
+                # x (Relocate From i,j): i,j -> k,l. Duration: h + t_out
+                duration = h + t_out
+                win_start = max(1, t - duration)
+                win_end = min(m.T - 1, t - 1)
+                for k in m.Lanes[1:-1]:
+                    for l in k.get_tiers():
+                        for v in m.Vehicles:
+                            for n in m.Unit_loads:
+                                for t_s in range(win_start, win_end + 1):
+                                    if (i.get_ap_id(), j.get_id(), k.get_ap_id(), l.get_id(), n.get_id(), t_s, v.get_id()) in m.x_vars:
+                                        outgoing_terms.append(m.x_vars[(i.get_ap_id(), j.get_id(), k.get_ap_id(), l.get_id(), n.get_id(), t_s, v.get_id())])
+
+                # e (Reposition From i,j): i,j -> k,l. Duration: t_out
+                duration = t_out
+                win_start = max(1, t - duration)
+                win_end = min(m.T - 1, t - 1)
+                for k in m.Lanes:
+                    for l in k.get_tiers():
+                        for v in m.Vehicles:
+                            for t_s in range(win_start, win_end + 1):
+                                if (i.get_ap_id(), j.get_id(), k.get_ap_id(), l.get_id(), t_s, v.get_id()) in m.e_vars:
+                                    outgoing_terms.append(m.e_vars[(i.get_ap_id(), j.get_id(), k.get_ap_id(), l.get_id(), t_s, v.get_id())])
+
+            m.model.addConstr(stationary + gp.quicksum(incoming_terms) + gp.quicksum(outgoing_terms) <= 1, name=constr_name)
 
 def lifo(m): 
     # ensures that the last unit load to be stored is the first to be retrieved
