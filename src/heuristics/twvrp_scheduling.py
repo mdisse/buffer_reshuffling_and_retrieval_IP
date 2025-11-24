@@ -1225,7 +1225,7 @@ class TWVRPSchedulingSolver:
         storage_moves = {}  # (lane, tier) -> list of (ul_id, store_move_id, retrieve_move_id)
         
         for move in scheduling_moves:
-            if move.move_type == 'store':
+            if move.move_type in ['store', 'reshuffle']:
                 # Track where this UL is stored
                 lane = self._parse_location_str(move.to_location)
                 if lane not in ['source', 'sink']:
@@ -1237,7 +1237,7 @@ class TWVRPSchedulingSolver:
                     retrieve_move = None
                     for other_move in scheduling_moves:
                         if (other_move.ul_id == move.ul_id and 
-                            other_move.move_type == 'retrieve' and
+                            other_move.move_type in ['retrieve', 'reshuffle', 'direct_retrieve'] and
                             self._parse_location_str(other_move.from_location) == lane and
                             other_move.from_tier == move.to_tier):
                             retrieve_move = other_move
