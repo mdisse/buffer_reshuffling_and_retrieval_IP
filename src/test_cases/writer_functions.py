@@ -4,7 +4,6 @@ wd = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(wd, '../..'))
 
 import json
-import subprocess
 import re
 from math import ceil
 
@@ -67,44 +66,33 @@ def save_heuristic_results(filename: str, test_case):
     data['vehicle_speed'] = test_case.instance.get_vehicle_speed()
     data['handling_time'] = test_case.instance.get_handling_time()
     
-    # Unit loads
     data['unit_loads'] = []
     for ul in test_case.instance.unit_loads:
         data['unit_loads'].append(ul.to_data_dict())
 
-    # Calculate heuristic objective if not already done
     if test_case.heuristic_objective is None:
         test_case.calculate_heuristic_objective()
     
-    # Translate heuristic decisions to Gurobi format first
     translated_decisions = {}
-    corrected_objective = test_case.heuristic_objective  # fallback
+    corrected_objective = test_case.heuristic_objective
     
     if test_case.amr_assignments and 'vehicles' in test_case.amr_assignments:
-        # Use a simpler approach without creating a full model
         translated_decisions = translate_heuristic_decisions_simple(test_case.amr_assignments, test_case.instance)
         
-        # Recalculate objective using the real (Gurobi-style) distances from translated decisions
         corrected_objective = 0
         for vehicle_key, vehicle_decisions in translated_decisions.items():
             for time_key, decision_data in vehicle_decisions.items():
                 corrected_objective += decision_data.get('distance', 0)
     
-    # Validate the solution if we have one
     validation_status = -1
     validation_report = {}
     is_feasible = False
     
     if translated_decisions:
         try:
-            # Use detailed validation
             is_feasible, validation_status, validation_report = validate_heuristic_solution_detailed(
-                test_case.instance, test_case, verbose=True  # Force debug output
+                test_case.instance, test_case, verbose=test_case.verbose
             )
-            if test_case.verbose: 
-                print(f"DEBUG save_heuristic_results: validation_report keys = {list(validation_report.keys())}")
-                print(f"DEBUG save_heuristic_results: tardiness_info length = {len(validation_report.get('tardiness_info', []))}")
-                print(f"DEBUG save_heuristic_results: total_tardiness = {validation_report.get('total_tardiness', 0)}")
         except Exception as e:
             validation_status = -1
             is_feasible = False
@@ -113,7 +101,6 @@ def save_heuristic_results(filename: str, test_case):
                 "violations": [{"type": "validation_error", "description": str(e)}]
             }
     else:
-        # No solution to validate
         validation_status = -1
         is_feasible = False
         validation_report = {
@@ -121,11 +108,22 @@ def save_heuristic_results(filename: str, test_case):
             "violations": [{"type": "no_solution", "description": "Heuristic to find a solution"}]
         }
     
-    # Results section matching Gurobi format  
+    mip_gap_value = 0.0
+    if is_feasible and validation_report.get('_validation_mipgap') is not None:
+        mip_gap_value = validation_report['_validation_mipgap']
+    elif hasattr(test_case, 'mip_gap') and test_case.mip_gap is not None:
+        if test_case.mip_gap == float('inf'):
+            mip_gap_value = -1.0
+        else:
+            mip_gap_value = test_case.mip_gap / 100.0
+
     data['results'] = {
-        'objective_value': corrected_objective,  # Use corrected objective based on real distances
+        'objective_value': corrected_objective,
         'runtime': test_case.heuristic_runtime if test_case.heuristic_runtime else 0.0,
-        'mipgap': 0.0,  # Heuristic doesn't have MIP gap
+        'mipgap': mip_gap_value,
+        'earliness': validation_report.get('total_earliness', 0),
+        'tardiness': validation_report.get('total_tardiness', 0),
+        'time_window_deviation': validation_report.get('total_time_window_deviation', 0),
         'decisions': translated_decisions,
         'astar_result': {
             'move_sequence': [],
@@ -137,20 +135,16 @@ def save_heuristic_results(filename: str, test_case):
             'status_code': validation_status,
             'message': validation_report.get('message', 'No validation performed'),
             'violations': validation_report.get('violations', []),
-            'tardiness_info': validation_report.get('tardiness_info', []),
+            'time_window_violations': validation_report.get('time_window_violations', []),
+            'total_earliness': validation_report.get('total_earliness', 0),
             'total_tardiness': validation_report.get('total_tardiness', 0),
-            'num_late_unit_loads': validation_report.get('num_late_unit_loads', 0),
+            'total_time_window_deviation': validation_report.get('total_time_window_deviation', 0),
+            'num_early_moves': validation_report.get('num_early_moves', 0),
             'num_late_moves': validation_report.get('num_late_moves', 0),
-            'details': validation_report
+            'num_violated_unit_loads': validation_report.get('num_violated_unit_loads', 0)
         }
     }
     
-    # Debug what's being written
-    if test_case.verbose: 
-        print(f"DEBUG: About to write tardiness_info with {len(data['results']['validation']['tardiness_info'])} items")
-        print(f"DEBUG: About to write total_tardiness = {data['results']['validation']['total_tardiness']}")
-    
-    # Add A* result information if available
     if hasattr(test_case, 'move_sequence') and test_case.move_sequence:
         move_sequence_data = []
         for i, move in enumerate(test_case.move_sequence):
@@ -158,7 +152,6 @@ def save_heuristic_results(filename: str, test_case):
                 'step': i + 1,
                 'type': move.get('type', 'unknown'),
                 'unit_load_id': move.get('ul_id', 0),
-                # Keep the original position objects/strings from A*
                 'from_position': str(move.get('from_pos', 'unknown')),
                 'to_position': str(move.get('to_pos', 'unknown'))
             }
@@ -170,11 +163,9 @@ def save_heuristic_results(filename: str, test_case):
             'description': 'A* search result - optimal sequence of moves determined before VRP assignment (all positions in [access_point, tier] format)'
         }
     
-    # Add A* solution states if available
     if 'astar_solution_states' in test_case.results:
         data['results']['astar_result']['solution_states'] = test_case.results['astar_solution_states']
 
-    # Buffer information
     data['bay_info'] = dict()
     data['sink_info'] = dict()
     data['source_info'] = dict()
@@ -196,96 +187,10 @@ def save_heuristic_results(filename: str, test_case):
     for lane in test_case.instance.wh_initial.virtual_lanes:
         data['virtual_lanes'].append(lane.to_data_dict())
 
-    # Create directory if it doesn't exist
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     
-    # Save the file first
-    f = open(filename, 'w')
-    json.dump(data, f, indent=4)
-    f.close()
-    
-    # Run Gurobi result checker if we have a solution
-    if translated_decisions:
-        try:
-            gurobi_check = run_gurobi_result_checker(filename, verbose=False)
-            
-            # Also try to get VRP warnings from test_case if available
-            vrp_warnings = []
-            if hasattr(test_case, 'vrp_solution') and test_case.vrp_solution:
-                vrp_warnings = test_case.vrp_solution.get('warnings', [])
-            
-            # Extract tardiness information from VRP warnings first (more accurate)
-            tardiness_info = []
-            for warning in vrp_warnings:
-                if 'tardiness' in warning and warning['tardiness'] > 0:
-                    tardiness_info.append({
-                        'move_id': warning.get('move_id', 0),
-                        'ul_id': warning.get('ul_id', 0),
-                        'deadline': warning.get('deadline', 0),
-                        'expected_finish': warning.get('expected_finish', 0),
-                        'tardiness': warning.get('tardiness', 0),
-                        'message': warning.get('message', '')
-                    })
-            
-            # If no VRP warnings found, fall back to Gurobi check warnings
-            if not vrp_warnings:
-                for warning in gurobi_check.get('warnings', []):
-                    if 'tardiness' in warning and warning['tardiness'] > 0:
-                        tardiness_info.append({
-                            'move_id': warning.get('move_id', 0),
-                            'ul_id': warning.get('ul_id', 0),
-                            'deadline': warning.get('deadline', 0),
-                            'expected_finish': warning.get('expected_finish', 0),
-                            'tardiness': warning.get('tardiness', 0),
-                            'message': warning.get('message', '')
-                        })
-            
-            # Calculate summary statistics for bulk analysis
-            total_tardiness = sum(info['tardiness'] for info in tardiness_info)
-            num_late_unit_loads = len(set(info['ul_id'] for info in tardiness_info))
-            
-            # Merge validation and heuristic information into a single validation section
-            # Preserve the tardiness information from our detailed validation
-            existing_tardiness_info = data['results']['validation'].get('tardiness_info', [])
-            existing_total_tardiness = data['results']['validation'].get('total_tardiness', 0)
-            existing_num_late_unit_loads = data['results']['validation'].get('num_late_unit_loads', 0)
-            existing_num_late_moves = data['results']['validation'].get('num_late_moves', 0)
-            
-            # Only use VRP/Gurobi tardiness if our validation didn't find any
-            if not existing_tardiness_info and tardiness_info:
-                final_tardiness_info = tardiness_info
-                final_total_tardiness = total_tardiness
-                final_num_late_unit_loads = num_late_unit_loads
-                final_num_late_moves = len(tardiness_info)
-            else:
-                # Prefer our validation results
-                final_tardiness_info = existing_tardiness_info
-                final_total_tardiness = existing_total_tardiness
-                final_num_late_unit_loads = existing_num_late_unit_loads
-                final_num_late_moves = existing_num_late_moves
-            
-            data['results']['validation'] = {
-                # Gurobi validation fields
-                'is_feasible': data['results']['validation']['is_feasible'],
-                'status_code': data['results']['validation']['status_code'],
-                'message': data['results']['validation']['message'],
-                'violations': data['results']['validation']['violations'],
-                
-                # Tardiness information for detailed analysis (preserve validation results)
-                'tardiness_info': final_tardiness_info,
-                
-                # Summary statistics for bulk analysis
-                'total_tardiness': final_total_tardiness,
-                'num_late_unit_loads': final_num_late_unit_loads,
-                'num_late_moves': final_num_late_moves
-            }
-            
-            # Save the file again with merged validation results
-            with open(filename, 'w') as f:
-                json.dump(data, f, indent=4)
-                
-        except Exception as e:
-            print(f"Warning: Could not run Gurobi result checker: {e}")
+    with open(filename, 'w') as f:
+        json.dump(data, f, indent=4)
     
     return corrected_objective
 
@@ -296,7 +201,6 @@ def generate_heuristic_result_path(instance_file_path: str, fleet_size_override=
     Converts from inputsBRR to resultsBRR and appends _heuristic suffix.
     Also adds fleet_size directory based on the instance data or override.
     """
-    # Use override fleet size if provided, otherwise read from instance
     if fleet_size_override is not None:
         fleet_size = fleet_size_override
     else:
@@ -307,15 +211,12 @@ def generate_heuristic_result_path(instance_file_path: str, fleet_size_override=
         except:
             fleet_size = 1
     
-    # Replace inputsBRR with resultsBRR
     result_path = instance_file_path.replace('inputsBRR', 'resultsBRR')
     
-    # Insert fleet_size directory before the filename
     path_parts = result_path.split('/')
     filename = path_parts[-1]
     directory = '/'.join(path_parts[:-1])
     
-    # Replace .json with _heuristic.json
     if filename.endswith('.json'):
         filename = filename[:-5] + '_heuristic.json'
     
@@ -330,7 +231,6 @@ def generate_heuristic_filename(instance_file_path: str, fleet_size_override=Non
     Converts from inputsBRR to resultsBRR and appends _heuristic suffix.
     Also adds fleet_size directory based on the instance data or override.
     """
-    # Use override fleet size if provided, otherwise read from instance
     if fleet_size_override is not None:
         fleet_size = fleet_size_override
     else:
@@ -341,19 +241,15 @@ def generate_heuristic_filename(instance_file_path: str, fleet_size_override=Non
         except:
             fleet_size = 1
     
-    # Replace inputsBRR with resultsBRR
     result_path = instance_file_path.replace('inputsBRR', 'resultsBRR')
     
-    # Insert fleet_size directory before the filename
     path_parts = result_path.split('/')
     filename = path_parts[-1]
     directory = '/'.join(path_parts[:-1])
     
-    # Replace .json with _heuristic.json
     if filename.endswith('.json'):
         filename = filename[:-5] + '_heuristic.json'
     
-    # result_path = f"{directory}/fleet_size_{fleet_size}/{filename}"
     result_path = f"{directory}/{filename}"
     
     return result_path
@@ -489,8 +385,35 @@ def translate_heuristic_decisions_simple(heuristic_decisions, instance):
                     to_lane = lane
             lane_distance = buffer.get_distance_lanes(from_lane, to_lane) if from_lane and to_lane else 0
         
-        # Add tier distance (same as Gurobi)
-        tier_distance = (from_tier_id - 1) + (to_tier_id - 1)
+        # Calculate tier distance using correct formula
+        # Tier numbering: Tier 1 = BACK/DEEPEST, Tier N = FRONT/CLOSEST to access point
+        # tier_depth = n_slots - tier_number
+        from_tier_depth = 0
+        to_tier_depth = 0
+        
+        # Get from_tier depth
+        if from_location not in ['sink', 'source']:
+            from_lane_obj = None
+            for lane in lanes:
+                if lane.get_ap_id() == from_lane_id:
+                    from_lane_obj = lane
+                    break
+            if from_lane_obj:
+                n_slots_from = len(from_lane_obj.stacks) if hasattr(from_lane_obj, 'stacks') else len(from_lane_obj.get_tiers())
+                from_tier_depth = n_slots_from - from_tier_id
+        
+        # Get to_tier depth
+        if to_location not in ['sink', 'source']:
+            to_lane_obj = None
+            for lane in lanes:
+                if lane.get_ap_id() == to_lane_id:
+                    to_lane_obj = lane
+                    break
+            if to_lane_obj:
+                n_slots_to = len(to_lane_obj.stacks) if hasattr(to_lane_obj, 'stacks') else len(to_lane_obj.get_tiers())
+                to_tier_depth = n_slots_to - to_tier_id
+        
+        tier_distance = from_tier_depth + to_tier_depth
         
         return lane_distance + tier_distance
     
@@ -507,11 +430,25 @@ def translate_heuristic_decisions_simple(heuristic_decisions, instance):
         vehicle_key = f"v{vehicle_id}"  # Already 1-indexed
         translated_decisions[vehicle_key] = {}
         
+        # Track vehicle's state (location and time) to correctly insert empty moves
+        # All vehicles start at sink
+        sink_ap_id = None
+        for lane in lanes:
+            if hasattr(lane, 'is_sink') and getattr(lane, 'is_sink', False):
+                sink_ap_id = lane.get_ap_id()
+                break
+        if sink_ap_id is None:
+            sink_ap_id = 16  # Fallback
+        
+        current_location = str(sink_ap_id)
+        current_tier = 1
+        current_time = 1  # Gurobi time is 1-based
+        
         # Process each move for this vehicle
         for move_idx, move in enumerate(vehicle['moves']):
             from_location = move['from_location']
             move_type = move['move_type']
-            ul_id = move['ul_id']
+            ul_id = move.get('ul_id', move.get('unit_load_id', 0))  # Support both ul_id and unit_load_id
             from_tier = move.get('from_tier', 1)
             to_tier = move.get('to_tier', 1)
             to_location = move['to_location']
@@ -527,57 +464,87 @@ def translate_heuristic_decisions_simple(heuristic_decisions, instance):
             if str(to_location) == str(source_ap_id):
                 to_tier = 1
 
-            # Use VRP's calculated timing if available, otherwise calculate our own
-            # Ensure first move starts at timestep 1, not 0
-            if 'start_time' in move:
-                current_time = move['start_time']
-                if move_idx == 0 and current_time == 0:
-                    current_time = 1  # Force first move to start at t=1
+            # Get the move's time from the CP-SAT solution
+            # IMPORTANT: The CP-SAT solver already converts times to 1-based Gurobi format!
+            # The 'start_time' and 'end_time' in the move dict are already 1-based.
+            # Do NOT add 1 again or we'll be off by 1!
+            # CRITICAL: Gurobi decision variable semantics:
+            # - For STORE: timestamp = when vehicle PICKS UP from source (start time)
+            # - For RETRIEVE: timestamp = when vehicle PICKS UP from buffer (start time)
+            # - For EMPTY: timestamp = when vehicle DEPARTS from origin (start time)
+            if 'start_time' in move and 'end_time' in move:
+                gurobi_start_time = move['start_time']  # Already 1-based!
+                gurobi_end_time = move['end_time']  # Already 1-based!
+                # Use the start time directly (no conversion needed)
+                loaded_move_start_time = gurobi_start_time
             else:
-                # Fallback to old calculation if VRP timing not available
-                current_time = 1 if move_idx == 0 else current_time
+                # Fallback: use current_time from previous move
+                # Only needed for legacy compatibility
+                loaded_move_start_time = current_time
+            
+            # --- INSERT EMPTY REPOSITIONING MOVE IF NEEDED ---
+            # If the vehicle is not at the start location of the next move, it must travel there.
+            if str(current_location) != str(from_location) or current_tier != from_tier:
+                real_empty_distance = calculate_real_distance(current_location, from_location, current_tier, from_tier)
+                
+                # Only insert empty move if there's actual distance to travel
+                if real_empty_distance > 0:
+                    empty_travel_time = calculate_gurobi_style_travel_time(real_empty_distance, False)
+                    
+                    # The empty move starts at the current time
+                    empty_start_time = current_time
+                    
+                    from_lane_id, _ = parse_location(current_location, current_tier)
+                    to_lane_id, _ = parse_location(from_location, from_tier)
+                    
+                    empty_decision = f"e_i{from_lane_id}_j{current_tier}_k{to_lane_id}_l{from_tier}_t{empty_start_time}_v{vehicle_id}"
+                    
+                    translated_decisions[vehicle_key][str(empty_start_time)] = {
+                        'decision': empty_decision,
+                        'move': f"[{from_lane_id}, {current_tier}] ⇄ [{to_lane_id}, {from_tier}]",
+                        'distance': real_empty_distance,
+                        'travel_time': empty_travel_time
+                    }
+                    
+                    # Update current time and location after the empty move
+                    current_time = empty_start_time + empty_travel_time
+                
+                # Update location even if distance is 0 (e.g., tier change at same lane)
+                current_location = from_location
+                current_tier = from_tier
+            
+            # The loaded move must start AFTER the vehicle arrives from its empty travel
+            # If CP-SAT scheduled it earlier, we must push it forward.
+            move_start_time = max(current_time, loaded_move_start_time)
             
             # Calculate real distance using Gurobi method instead of heuristic estimate
             real_distance = calculate_real_distance(from_location, to_location, from_tier, to_tier)
             service_time = move['service_time']
             empty_travel_distance = move.get('empty_travel_distance', 0)
             
-            # Handle empty travel moves
+            # Handle empty travel moves (legacy - should not occur with new CP-SAT solution)
             if move_type == 'empty':
-                # This is an explicit empty travel move
+                # This is an explicit empty travel move from the CP-SAT solution
+                # We should have already handled repositioning above, but process it anyway
                 from_lane_id, from_tier_id = parse_location(from_location, from_tier)
                 to_lane_id, to_tier_id = parse_location(to_location, to_tier)
                 
-                empty_decision = f"e_i{from_lane_id}_j{from_tier}_k{to_lane_id}_l{to_tier}_t{current_time}_v{vehicle_id}"
+                empty_decision = f"e_i{from_lane_id}_j{from_tier}_k{to_lane_id}_l{to_tier}_t{move_start_time}_v{vehicle_id}"
                 
-                translated_decisions[vehicle_key][str(current_time)] = {
+                translated_decisions[vehicle_key][str(move_start_time)] = {
                     'decision': empty_decision,
                     'move': f"[{from_lane_id}, {from_tier}] ⇄ [{to_lane_id}, {to_tier}]",
                     'distance': real_distance,
                     'travel_time': calculate_gurobi_style_travel_time(real_distance, False)  # Empty move
                 }
-                current_time += calculate_gurobi_style_travel_time(real_distance, False)
+                
+                # Update current_time and location
+                current_time = move_start_time + calculate_gurobi_style_travel_time(real_distance, False)
                 current_location = to_location
+                current_tier = to_tier
                 continue
             
-            # Handle legacy empty travel if needed (for backward compatibility)
-            if empty_travel_distance > 0:
-                # Add empty travel move (e variable)
-                from_lane_id, from_tier_id = parse_location(current_location, 1)  # Current location tier is always 1 for legacy moves
-                to_lane_id, to_tier_id = parse_location(from_location, from_tier)
-                
-                # Calculate real distance for empty travel
-                real_empty_distance = calculate_real_distance(current_location, from_location, 1, from_tier)
-                
-                empty_decision = f"e_i{from_lane_id}_j{from_tier_id}_k{to_lane_id}_l{to_tier}_t{current_time}_v{vehicle_id}"
-                
-                translated_decisions[vehicle_key][str(current_time)] = {
-                    'decision': empty_decision,
-                    'move': f"[{from_lane_id}, {from_tier_id}] ⇄ [{to_lane_id}, {to_tier}]",
-                    'distance': real_empty_distance,
-                    'travel_time': calculate_gurobi_style_travel_time(real_empty_distance, False)  # Empty move
-                }
-                current_time += calculate_gurobi_style_travel_time(real_empty_distance, False)
+            # Legacy empty travel handling removed - we now insert empty moves explicitly above
             
             # Create the main move decision
             if move_type == 'retrieve':
@@ -588,7 +555,7 @@ def translate_heuristic_decisions_simple(heuristic_decisions, instance):
                     if hasattr(lane, 'is_sink') and getattr(lane, 'is_sink', False):
                         sink_ap_id = lane.get_ap_id()
                         break
-                decision = f"y_i{from_lane_id}_j{from_tier}_n{ul_id}_t{current_time}_v{vehicle_id}"
+                decision = f"y_i{from_lane_id}_j{from_tier}_n{ul_id}_t{move_start_time}_v{vehicle_id}"
                 move_symbol = "→"
                 move_text = f"[{from_lane_id}, {from_tier}] {move_symbol} [{sink_ap_id}, 1]"
             elif move_type == 'store':
@@ -599,13 +566,13 @@ def translate_heuristic_decisions_simple(heuristic_decisions, instance):
                     if hasattr(lane, 'is_source') and getattr(lane, 'is_source', False):
                         source_ap_id = lane.get_ap_id()
                         break
-                decision = f"z_i{to_lane_id}_j{to_tier}_n{ul_id}_t{current_time}_v{vehicle_id}"
+                decision = f"z_i{to_lane_id}_j{to_tier}_n{ul_id}_t{move_start_time}_v{vehicle_id}"
                 move_symbol = "→"
                 move_text = f"[{source_ap_id}, 1] {move_symbol} [{to_lane_id}, {to_tier}]"
             elif move_type == 'reshuffle':
                 from_lane_id, _ = parse_location(from_location, from_tier)
                 to_lane_id, _ = parse_location(to_location, to_tier)
-                decision = f"x_i{from_lane_id}_j{from_tier}_k{to_lane_id}_l{to_tier}_n{ul_id}_t{current_time}_v{vehicle_id}"
+                decision = f"x_i{from_lane_id}_j{from_tier}_k{to_lane_id}_l{to_tier}_n{ul_id}_t{move_start_time}_v{vehicle_id}"
                 move_symbol = "⇄"
                 move_text = f"[{from_lane_id}, {from_tier}] {move_symbol} [{to_lane_id}, {to_tier}]"
             elif move_type == 'direct_retrieve':
@@ -621,31 +588,29 @@ def translate_heuristic_decisions_simple(heuristic_decisions, instance):
                 
                 # Direct retrieve is essentially a load move from source to sink
                 # Use a retrieval-style decision variable format but from source to sink
-                decision = f"y_i{source_ap_id}_j1_n{ul_id}_t{current_time}_v{vehicle_id}"
+                decision = f"y_i{source_ap_id}_j1_n{ul_id}_t{move_start_time}_v{vehicle_id}"
                 move_symbol = "→"
                 move_text = f"[{source_ap_id}, 1] {move_symbol} [{sink_ap_id}, 1]"
             else:
                 # Unknown move type, use generic format
                 from_lane_id, from_tier_id = parse_location(from_location, from_tier)
                 to_lane_id, to_tier_id = parse_location(to_location, to_tier)
-                decision = f"unknown_{move_type}_t{current_time}_v{vehicle_id}"
+                decision = f"unknown_{move_type}_t{move_start_time}_v{vehicle_id}"
                 move_symbol = "→"
                 move_text = f"[{from_lane_id}, {from_tier}] {move_symbol} [{to_lane_id}, {to_tier}]"
             
             # Add the move to translated decisions
-            translated_decisions[vehicle_key][str(current_time)] = {
+            translated_decisions[vehicle_key][str(move_start_time)] = {
                 'decision': decision,
                 'move': move_text,
                 'distance': real_distance,
                 'travel_time': calculate_gurobi_style_travel_time(real_distance, True)  # Loaded move
             }
             
-            # Update current location and time
-            # Use VRP's end_time if available, otherwise calculate
-            if 'end_time' in move:
-                current_time = move['end_time']
-            else:
-                current_time += calculate_gurobi_style_travel_time(real_distance, True)
+            # Update current location and time for the next iteration
+            current_time = move_start_time + calculate_gurobi_style_travel_time(real_distance, True)
+            current_location = to_location
+            current_tier = to_tier
     
     return translated_decisions
 
@@ -712,8 +677,6 @@ def validate_heuristic_solution_detailed(instance, test_case, verbose=False):
 
         if verbose:
             print(f"  Found {len(all_decision_values)} decisions to validate (including idle moves)")
-            if all_decision_values:
-                print(f"  Sample decisions: {all_decision_values[:5]}")
         
         if not all_decision_values:
             return False, -1, {"message": "No decision values found", "violations": []}
@@ -732,12 +695,25 @@ def validate_heuristic_solution_detailed(instance, test_case, verbose=False):
             "violations": []
         }
         
+        # Initialize validation variables outside try block
+        validation_mipgap = None
+        validation_objective = None
+        status = -1
+        
         # Run constraint validation with verbose output to capture violations
         try:
             validation_test_case = TestCaseBrr(instance=instance, variant="dynamic_multiple", solution=solution, verbose=verbose, mode="check")
             
             # Capture the validation status
             status = validation_test_case.check_solution()
+            
+            # Capture the MIP gap from Gurobi validation
+            try:
+                if hasattr(validation_test_case, 'model') and hasattr(validation_test_case.model, 'model'):
+                    validation_mipgap = validation_test_case.model.model.MIPGap
+                    validation_objective = validation_test_case.model.model.objVal
+            except Exception as e:
+                pass  # MIP gap not available
             
             # For heuristic solutions, if status is 3 but no violations are found,
             # treat it as feasible since our heuristic respects the important constraints
@@ -748,28 +724,43 @@ def validate_heuristic_solution_detailed(instance, test_case, verbose=False):
             detailed_report["violations"] = [{"type": "validation_error", "description": str(e)}]
             return False, -1, detailed_report
         
-        # Always analyze for tardiness information, regardless of feasibility status
-        violations, tardiness_info = analyze_constraint_violations(instance, test_case, all_decision_values, verbose)
+        # Always analyze for time window violations, regardless of feasibility status
+        violations, time_window_violations = analyze_constraint_violations(instance, test_case, all_decision_values, verbose)
         
         if verbose:
-            print(f"  Analysis found {len(violations)} violations and {len(tardiness_info)} tardiness items")
-            if tardiness_info:
-                print(f"  Tardiness details: {tardiness_info[:3]}...")  # Show first 3 items
+            print(f"  Analysis found {len(violations)} violations and {len(time_window_violations)} time window violations")
+            if time_window_violations:
+                print(f"  Time window violation details: {time_window_violations[:3]}...")  # Show first 3 items
         
         # Trust Gurobi validation completely - do not override status 3
         # If Gurobi says infeasible (status 3), the solution is invalid
         
-        # Add tardiness information to all reports
-        total_tardiness = sum(info['tardiness'] for info in tardiness_info)
-        num_late_unit_loads = len(set(info['ul_id'] for info in tardiness_info))
-        detailed_report["tardiness_info"] = tardiness_info
+        # Calculate summary statistics from time window violations
+        total_earliness = sum(info['earliness'] for info in time_window_violations)
+        total_tardiness = sum(info['tardiness'] for info in time_window_violations)
+        total_time_window_deviation = sum(info['total_deviation'] for info in time_window_violations)
+        num_early_moves = sum(1 for info in time_window_violations if info['earliness'] > 0)
+        num_late_moves = sum(1 for info in time_window_violations if info['tardiness'] > 0)
+        num_violated_unit_loads = len(set(info['ul_id'] for info in time_window_violations))
+        
+        # Add time window violation details to report
+        detailed_report["time_window_violations"] = time_window_violations
+        detailed_report["total_earliness"] = total_earliness
         detailed_report["total_tardiness"] = total_tardiness
-        detailed_report["num_late_unit_loads"] = num_late_unit_loads
-        detailed_report["num_late_moves"] = len(tardiness_info)
+        detailed_report["total_time_window_deviation"] = total_time_window_deviation
+        detailed_report["num_early_moves"] = num_early_moves
+        detailed_report["num_late_moves"] = num_late_moves
+        detailed_report["num_violated_unit_loads"] = num_violated_unit_loads
+        
+        # Store validation results internally (not exposed in JSON, but used for mipgap calculation)
+        if validation_mipgap is not None:
+            detailed_report["_validation_mipgap"] = validation_mipgap
+        if validation_objective is not None:
+            detailed_report["_validation_objective"] = validation_objective
         
         if status == 2:  # Optimal/feasible
             detailed_report["message"] = "Solution is feasible and optimal"
-            # Even feasible solutions might have tardiness in some formulations
+            # Even feasible solutions might have time window violations in some formulations
             detailed_report["violations"] = violations  # Include any soft violations
             return True, status, detailed_report
         elif status == 13:  # Suboptimal but feasible
@@ -806,7 +797,9 @@ def analyze_constraint_violations(instance, test_case, decisions, verbose=False)
     Analyze potential constraint violations in the heuristic solution.
     
     Returns:
-        List of violation descriptions
+        tuple: (violations, time_window_violations)
+            - violations: List of violation descriptions
+            - time_window_violations: List of dicts with earliness/tardiness details
     """
     violations = []
     
@@ -945,15 +938,15 @@ def analyze_constraint_violations(instance, test_case, decisions, verbose=False)
                 'retrieval_end': ul.get_retrieval_end()
             }
         
-        # Track tardiness information
-        tardiness_info = []
+        # Track time window violations (both earliness and tardiness)
+        time_window_violations = []
         
         # Check each vehicle's schedule
         for vehicle_id, moves in moves_by_vehicle.items():
             # Sort moves by time
             moves.sort(key=lambda x: x['time'])
             
-            # Check for time window violations and calculate tardiness
+            # Check for time window violations and calculate earliness/tardiness
             for move in moves:
                 if move['type'] in ['store', 'retrieve', 'direct_retrieve'] and 'unit_load' in move:
                     ul_id = move['unit_load']
@@ -962,11 +955,15 @@ def analyze_constraint_violations(instance, test_case, decisions, verbose=False)
                         
                         if move['type'] == 'store':
                             # Store operations should be within arrival window
-                            if move['time'] < tw['arrival_start'] or move['time'] > tw['arrival_end']:
-                                tardiness = 0
-                                if move['time'] > tw['arrival_end']:
-                                    tardiness = move['time'] - tw['arrival_end']
-                                
+                            earliness = 0
+                            tardiness = 0
+                            
+                            if move['time'] < tw['arrival_start']:
+                                earliness = tw['arrival_start'] - move['time']
+                            elif move['time'] > tw['arrival_end']:
+                                tardiness = move['time'] - tw['arrival_end']
+                            
+                            if earliness > 0 or tardiness > 0:
                                 violations.append({
                                     "type": "arrival_time_window_violation",
                                     "description": f"Unit load {ul_id} stored at time {move['time']}, but arrival window is [{tw['arrival_start']}, {tw['arrival_end']}]",
@@ -975,17 +972,20 @@ def analyze_constraint_violations(instance, test_case, decisions, verbose=False)
                                     "window": [tw['arrival_start'], tw['arrival_end']]
                                 })
                                 
-                                if tardiness > 0:
-                                    tardiness_info.append({
-                                        'move_id': f"store_{ul_id}",
-                                        'ul_id': ul_id,
-                                        'deadline': tw['arrival_end'],
-                                        'expected_finish': move['time'],
-                                        'tardiness': tardiness,
-                                        'message': f"Store operation for UL {ul_id} late by {tardiness} time units"
-                                    })
-                                    if verbose:
-                                        print(f"    Added tardiness item for store UL {ul_id}: tardiness={tardiness}")
+                                time_window_violations.append({
+                                    'move_id': f"store_{ul_id}",
+                                    'ul_id': ul_id,
+                                    'operation': 'store',
+                                    'actual_time': move['time'],
+                                    'window_start': tw['arrival_start'],
+                                    'window_end': tw['arrival_end'],
+                                    'earliness': earliness,
+                                    'tardiness': tardiness,
+                                    'total_deviation': earliness + tardiness,
+                                    'message': f"Store operation for UL {ul_id}: {'early by ' + str(earliness) if earliness > 0 else 'late by ' + str(tardiness)} time units"
+                                })
+                                if verbose:
+                                    print(f"    Added time window violation for store UL {ul_id}: earliness={earliness}, tardiness={tardiness}")
                         
                         elif move['type'] in ['retrieve', 'direct_retrieve']:
                             # For retrieval, the time window applies to the arrival at the sink.
@@ -999,8 +999,11 @@ def analyze_constraint_violations(instance, test_case, decisions, verbose=False)
                             
                             if from_lane_obj:
                                 # Calculate Gurobi-style travel time
+                                # Tier numbering: Tier 1 = BACK/DEEPEST, Tier N = FRONT/CLOSEST to access point
+                                # tier_depth = n_slots - tier_number
                                 lane_distance = buffer.get_distance_sink(from_lane_obj)
-                                tier_distance = from_tier - 1
+                                n_slots = len(from_lane_obj.stacks) if hasattr(from_lane_obj, 'stacks') else len(from_lane_obj.get_tiers())
+                                tier_distance = n_slots - from_tier
                                 total_distance = lane_distance + tier_distance
                                 travel_time = ceil(total_distance / instance.get_vehicle_speed()) + (2 * instance.get_handling_time())
                             else:
@@ -1009,11 +1012,15 @@ def analyze_constraint_violations(instance, test_case, decisions, verbose=False)
 
                             arrival_at_sink_time = move['time'] + travel_time
                             
-                            if arrival_at_sink_time < tw['retrieval_start'] or arrival_at_sink_time > tw['retrieval_end']:
-                                tardiness = 0
-                                if arrival_at_sink_time > tw['retrieval_end']:
-                                    tardiness = arrival_at_sink_time - tw['retrieval_end']
-                                
+                            earliness = 0
+                            tardiness = 0
+                            
+                            if arrival_at_sink_time < tw['retrieval_start']:
+                                earliness = tw['retrieval_start'] - arrival_at_sink_time
+                            elif arrival_at_sink_time > tw['retrieval_end']:
+                                tardiness = arrival_at_sink_time - tw['retrieval_end']
+                            
+                            if earliness > 0 or tardiness > 0:
                                 move_name = "directly retrieved" if move['type'] == 'direct_retrieve' else "retrieved"
                                 violations.append({
                                     "type": "retrieval_time_window_violation",
@@ -1023,18 +1030,21 @@ def analyze_constraint_violations(instance, test_case, decisions, verbose=False)
                                     "window": [tw['retrieval_start'], tw['retrieval_end']]
                                 })
                                 
-                                if tardiness > 0:
-                                    move_name = "Direct retrieve" if move['type'] == 'direct_retrieve' else "Retrieve"
-                                    tardiness_info.append({
-                                        'move_id': f"{move['type']}_{ul_id}",
-                                        'ul_id': ul_id,
-                                        'deadline': tw['retrieval_end'],
-                                        'expected_finish': arrival_at_sink_time,
-                                        'tardiness': tardiness,
-                                        'message': f"{move_name} operation for UL {ul_id} late by {tardiness} time units"
-                                    })
-                                    if verbose:
-                                        print(f"    Added tardiness item for {move['type']} UL {ul_id}: tardiness={tardiness}")
+                                move_name = "Direct retrieve" if move['type'] == 'direct_retrieve' else "Retrieve"
+                                time_window_violations.append({
+                                    'move_id': f"{move['type']}_{ul_id}",
+                                    'ul_id': ul_id,
+                                    'operation': move['type'],
+                                    'actual_time': arrival_at_sink_time,
+                                    'window_start': tw['retrieval_start'],
+                                    'window_end': tw['retrieval_end'],
+                                    'earliness': earliness,
+                                    'tardiness': tardiness,
+                                    'total_deviation': earliness + tardiness,
+                                    'message': f"{move_name} operation for UL {ul_id}: {'early by ' + str(earliness) if earliness > 0 else 'late by ' + str(tardiness)} time units"
+                                })
+                                if verbose:
+                                    print(f"    Added time window violation for {move['type']} UL {ul_id}: earliness={earliness}, tardiness={tardiness}")
                             
                             # Special check for direct retrievals: source blocking violation
                             if move['type'] == 'direct_retrieve':
@@ -1054,13 +1064,17 @@ def analyze_constraint_violations(instance, test_case, decisions, verbose=False)
                                         "blocking_duration": blocking_duration
                                     })
                                     
-                                    # Add to tardiness info as well since this affects system efficiency
-                                    tardiness_info.append({
+                                    # Add to time window violations as well since this affects system efficiency
+                                    time_window_violations.append({
                                         'move_id': f"source_blocking_{ul_id}",
                                         'ul_id': ul_id,
-                                        'deadline': tw['arrival_end'],  # Should be moved out of source by arrival_end
-                                        'expected_finish': move['time'],
+                                        'operation': 'source_blocking',
+                                        'actual_time': move['time'],
+                                        'window_start': tw['arrival_end'],
+                                        'window_end': tw['arrival_end'],  # Should be moved out immediately
+                                        'earliness': 0,
                                         'tardiness': blocking_duration,
+                                        'total_deviation': blocking_duration,
                                         'message': f"Unit load {ul_id} blocks source for {blocking_duration} time units"
                                     })
                                     if verbose:
@@ -1149,106 +1163,6 @@ def analyze_constraint_violations(instance, test_case, decisions, verbose=False)
             "type": "analysis_error",
             "description": f"Error analyzing violations: {str(e)}"
         })
-        tardiness_info = []
+        time_window_violations = []
     
-    return violations, tardiness_info
-
-def run_gurobi_result_checker(heuristic_result_path, verbose=False):
-    """
-    Run the Gurobi result checker on the heuristic solution and capture output.
-    
-    Args:
-        heuristic_result_path: Path to the heuristic result JSON file
-        verbose: Whether to show verbose output
-        
-    Returns:
-        Dictionary containing feasibility status and any warnings/violations
-    """
-    try:
-        # Get the path to the result checker script
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        root_dir = os.path.join(script_dir, '../..')
-        result_checker_path = os.path.join(root_dir, 'result_checker_BRR.py')
-        
-        # Run the result checker
-        cmd = [sys.executable, result_checker_path, '--solution_path', heuristic_result_path]
-        
-        if verbose:
-            print(f"Running Gurobi result checker: {' '.join(cmd)}")
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=root_dir)
-        
-        gurobi_check = {
-            'feasible': None,
-            'status': None,
-            'warnings': [],
-            'violations': [],
-            'raw_output': result.stdout.strip() if result.stdout else '',
-            'error_output': result.stderr.strip() if result.stderr else ''
-        }
-        
-        # Parse the output for feasibility status
-        output_lines = result.stdout.strip().split('\n') if result.stdout else []
-        
-        for line in output_lines:
-            # Look for status codes (common Gurobi status codes)
-            if line.strip().isdigit():
-                status_code = int(line.strip())
-                gurobi_check['status'] = status_code
-                
-                # Interpret status codes
-                if status_code == 2:  # Optimal
-                    gurobi_check['feasible'] = True
-                elif status_code == 13:  # Suboptimal but feasible
-                    gurobi_check['feasible'] = True
-                elif status_code == 3:  # Infeasible
-                    gurobi_check['feasible'] = False
-                elif status_code == 9:  # Time limit reached
-                    gurobi_check['feasible'] = True
-                elif status_code == 10:  # Solution limit reached
-                    gurobi_check['feasible'] = True
-                else:
-                    gurobi_check['feasible'] = False
-            
-            # Look for warning messages about timing violations
-            if "Warning:" in line:
-                warning_match = re.search(r'Warning: Move (\d+) \(UL (\d+)\) cannot finish by deadline (\d+)\. Expected finish: (\d+), Vehicle available: (\d+)', line)
-                if warning_match:
-                    move_id, ul_id, deadline, expected_finish, vehicle_available = warning_match.groups()
-                    tardiness = int(expected_finish) - int(deadline)
-                    gurobi_check['warnings'].append({
-                        'move_id': int(move_id),
-                        'ul_id': int(ul_id),
-                        'deadline': int(deadline),
-                        'expected_finish': int(expected_finish),
-                        'vehicle_available': int(vehicle_available),
-                        'tardiness': tardiness,
-                        'message': line.strip()
-                    })
-                else:
-                    # Generic warning
-                    gurobi_check['warnings'].append({
-                        'message': line.strip()
-                    })
-        
-        # If no explicit feasibility status found, try to infer from return code
-        if gurobi_check['feasible'] is None:
-            if result.returncode == 0:
-                gurobi_check['feasible'] = True
-            else:
-                gurobi_check['feasible'] = False
-        
-        return gurobi_check
-        
-    except Exception as e:
-        if verbose:
-            print(f"Error running Gurobi result checker: {e}")
-        return {
-            'feasible': None,
-            'status': None,
-            'warnings': [],
-            'violations': [],
-            'error': str(e),
-            'raw_output': '',
-            'error_output': ''
-        }
+    return violations, time_window_violations

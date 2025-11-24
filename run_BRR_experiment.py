@@ -56,7 +56,7 @@ def create_paths(instance):
 
 def generate_instances():
     files = [
-        'Size_3x3_Layout_1x1_sink_source',
+        # 'Size_3x3_Layout_1x1_sink_source',
         'Size_4x4_Layout_1x1_sink_source',
         # 'Size_5x5_Layout_1x1_sink_source',
         # 'Size_6x6_Layout_1x1_sink_source',
@@ -76,39 +76,41 @@ def generate_instances():
         {"north" : False, "east" : True, "south" : True, "west" : False}, 
         {"north" : True, "east" : False, "south" : True, "west" : False}, 
     ]
+    # seeds = [i for i in range(10)]
     seeds = [i for i in range(10)]
     fill_levels = [i/10 for i in range(5, 15)]
-    # fill_levels = [0.3]
+    # fill_levels = [0.1]
     # time_window_lengths = [i for i in range(30, 61, 10)]
-    time_window_lengths = [40]
+    time_window_lengths = [40, 50]
     vehicle_speeds = [1]
     fleet_sizes = [1, 2, 3]
     rs_maxes = [200]
-    as_max = 150
-    for file in files: 
-        for time_window_length in time_window_lengths:
-            for vehicle_speed in vehicle_speeds:
-                for rs_max in rs_maxes:
-                    for fill_level in fill_levels:
-                        for fleet_size in fleet_sizes:
-                            for seed in seeds: 
-                                for access_directions in ad:
-                                    layout_file = f"examples/{file}.csv"
-                                    instance = Instance(
-                                        layout_file=layout_file,
-                                        seed=seed,
-                                        access_directions=access_directions, 
-                                        max_p=0, 
-                                        fill_level=fill_level,
-                                        fleet_size=fleet_size,
-                                        vehicle_speed=vehicle_speed,
-                                        handling_time=1,
-                                        exampleGenerator=UnitLoadGenerator(tw_length=time_window_length, fill_level=fill_level, seed=seed, rs_max=rs_max, as_max=as_max, source=True),
-                                        rs_max=rs_max,
-                                        as_max=as_max,
-                                        time_window_length=time_window_length,
-                                    )
-                                    yield instance
+    as_maxes = [100, 150]
+    for seed in seeds: 
+        for file in files: 
+            for time_window_length in time_window_lengths:
+                for vehicle_speed in vehicle_speeds:
+                    for rs_max in rs_maxes:
+                        for as_max in as_maxes:
+                            for fill_level in fill_levels:
+                                for fleet_size in fleet_sizes:
+                                    for access_directions in ad:
+                                        layout_file = f"examples/{file}.csv"
+                                        instance = Instance(
+                                            layout_file=layout_file,
+                                            seed=seed,
+                                            access_directions=access_directions, 
+                                            max_p=0, 
+                                            fill_level=fill_level,
+                                            fleet_size=fleet_size,
+                                            vehicle_speed=vehicle_speed,
+                                            handling_time=1,
+                                            exampleGenerator=UnitLoadGenerator(tw_length=time_window_length, fill_level=fill_level, seed=seed, rs_max=rs_max, as_max=as_max, source=True),
+                                            rs_max=rs_max,
+                                            as_max=as_max,
+                                            time_window_length=time_window_length,
+                                        )
+                                        yield instance
 
 
 def solve_instance(instance, input_path, result_path, hash_path, feasibility_path, verbose, generate_only=False, force_resolve=False): # Add force_resolve parameter

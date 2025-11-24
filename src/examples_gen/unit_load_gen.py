@@ -52,9 +52,11 @@ class UnitLoadGenerator:
             retrieval_start = int(self.rng.integers(1, self.rs_max))
             retrieval_end = retrieval_start + int(self.rng.normal(self.tw_length / 2, self.tw_length / 6))
             if source and self.source:
-                arrival_start = max(0, int(self.rng.integers(-(self.as_max-self.tw_length), self.as_max)))
+                arrival_start = int(self.rng.integers(-(self.as_max-self.tw_length), self.as_max))
                 arrival_end = arrival_start + int(self.rng.normal(self.tw_length / 2, self.tw_length / 6))
-            else: 
+                if arrival_end > retrieval_start:
+                    continue 
+            else:
                 arrival_start = None
                 arrival_end = None
             yield retrieval_start, retrieval_end, arrival_start, arrival_end

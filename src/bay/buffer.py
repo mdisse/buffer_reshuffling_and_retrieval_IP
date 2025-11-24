@@ -374,53 +374,63 @@ class Buffer:
 
     def move_unit_load(self, ul_id, from_pos, to_pos):
         """
-        Applies a move to the buffer state. Consistently uses VirtualLane objects.
+        Applies a move to the buffer state. Uses ap_id for lane identification.
+        from_pos and to_pos can be either ap_id integers or VirtualLane objects.
         """
+        # Convert VirtualLane objects to ap_ids for consistent handling
+        from_ap_id = from_pos.ap_id if hasattr(from_pos, 'ap_id') else from_pos
+        to_ap_id = to_pos.ap_id if hasattr(to_pos, 'ap_id') else to_pos
+        
         # Handle direct source-to-sink moves (direct retrieval)
-        if isinstance(from_pos, str) and from_pos == 'source' and isinstance(to_pos, str) and to_pos == 'sink':
+        if from_ap_id == 'source' and to_ap_id == 'sink':
             # Direct retrieval - no buffer state changes needed
-            # The unit load goes directly from source to sink
             return
 
         # Handle moves from the source (storage)
-        if isinstance(from_pos, str) and from_pos == 'source':
-            # to_pos is the destination VirtualLane object
-            # Find the index of to_pos in virtual_lanes and update it
+        if from_ap_id == 'source':
+            # Find the destination lane by ap_id and add the unit load
             for i, lane in enumerate(self.virtual_lanes):
-                if lane == to_pos:
+                if lane.ap_id == to_ap_id:
                     self.virtual_lanes[i] = lane.add_load(ul_id)
                     break
             return
 
         # Handle moves to the sink (retrieval)
-        if isinstance(to_pos, str) and to_pos == 'sink':
-            # from_pos is the source VirtualLane object
-            # Find the index of from_pos in virtual_lanes and update it
+        if to_ap_id == 'sink':
+            # Find the source lane by ap_id and remove the unit load
             for i, lane in enumerate(self.virtual_lanes):
-                if lane == from_pos:
+                if lane.ap_id == from_ap_id:
                     self.virtual_lanes[i], _ = lane.remove_load()
                     break
             return
             
         # Handle internal moves (reshuffling)
-        # from_pos and to_pos are both VirtualLane objects
-        # Update both lanes in the virtual_lanes list
+        # First, remove the specific unit load from the source lane
+        removed_ul = None
         for i, lane in enumerate(self.virtual_lanes):
-            if lane == from_pos:
-                self.virtual_lanes[i], removed_ul = lane.remove_load()
-            elif lane == to_pos:
+            if lane.ap_id == from_ap_id:
+                self.virtual_lanes[i], removed_ul = lane.remove_specific_load(ul_id)
+                break
+        
+        # Then, add the unit load to the destination lane
+        for i, lane in enumerate(self.virtual_lanes):
+            if lane.ap_id == to_ap_id:
                 self.virtual_lanes[i] = lane.add_load(ul_id)
+                break
 
     def add_unit_load(self, unit_load, position):
         """
         Adds a unit load to a specific position in the buffer.
-        'position' is a VirtualLane object.
+        'position' can be a VirtualLane object or ap_id.
         """
         if self.virtual_lanes is None:
             self.get_virtual_lanes()
         
+        # Convert to ap_id for consistent handling
+        target_ap_id = position.ap_id if hasattr(position, 'ap_id') else position
+        
         for i, lane in enumerate(self.virtual_lanes):
-            if lane == position:
+            if lane.ap_id == target_ap_id:
                 self.virtual_lanes[i] = lane.add_load(unit_load.id)
                 break
 
@@ -430,10 +440,10 @@ class Buffer:
         """
         lane_to_modify = self._find_lane_for_ul(ul_id)
         if lane_to_modify:
-            # Find the lane in the list and update it
+            # Find the lane in the list by ap_id and update it
             for i, lane in enumerate(self.virtual_lanes):
-                if lane == lane_to_modify:
-                    self.virtual_lanes[i], _ = lane.remove_load()
+                if lane.ap_id == lane_to_modify.ap_id:
+                    self.virtual_lanes[i], _ = lane.remove_specific_load(ul_id)
                     break
 
     def get_hashable_state(self) -> tuple:
@@ -508,7 +518,9 @@ class Buffer:
     def get_all_blocking_moves(self, all_unit_loads: list) -> list:
         """
         Identifies all unit loads that are blocking higher-priority unit loads within the same lane.
-        A block occurs if a lower-priority UL is physically in front of a higher-priority UL.
+        A block occurs if a lower-priority UL is physically in front of a higher-priority UL,
+        OR if unit loads with the same priority are in the same lane (tight time windows make
+        sequential retrievals difficult).
 
         Args:
             all_unit_loads: A list of all UnitLoad objects to get priority info.
@@ -521,7 +533,8 @@ class Buffer:
             self.get_virtual_lanes()
 
         blocking_moves = []
-        priority_lookup = {ul.id: ul.priority for ul in all_unit_loads}
+        # Use retrieval priority for blocking detection - this determines order of retrieval
+        priority_lookup = {ul.id: ul.retrieval_priority for ul in all_unit_loads}
 
         for lane in self.virtual_lanes:
             if lane.is_sink_or_source() or lane.is_empty():
@@ -545,8 +558,10 @@ class Buffer:
                     priority_front = priority_lookup.get(ul_front_id, float('inf'))
                     priority_back = priority_lookup.get(ul_back_id, float('inf'))
 
-                    if priority_front > priority_back:
-                        # The unit load at the front (i) has lower priority than the one
+                    # Block if front UL has lower priority OR same priority
+                    # Same priority is problematic due to tight time windows for sequential retrieval
+                    if priority_front >= priority_back:
+                        # The unit load at the front (i) has lower or equal priority than the one
                         # at the back (j), so it's a blocking item.
                         blocking_ul_ids_in_lane.add(ul_front_id)
             
@@ -554,3 +569,33 @@ class Buffer:
                 blocking_moves.append({'ul_id': ul_id, 'from_lane': lane})
 
         return blocking_moves
+
+    def copy(self):
+        """
+        Creates an efficient copy of the buffer with all its current state.
+        This is much faster than deep copy as it only copies the essential mutable state.
+        """
+        # Create new buffer instance
+        new_buffer = Buffer.__new__(Buffer)
+        
+        # Copy immutable attributes (these can be shared)
+        new_buffer.bays = self.bays  # AccessBay objects - immutable structure
+        new_buffer.path_nodes = self.path_nodes
+        new_buffer.edges = self.edges
+        new_buffer.length = self.length
+        new_buffer.width = self.width
+        new_buffer.sinks = self.sinks
+        new_buffer.sources = self.sources
+        new_buffer.neighbors = self.neighbors
+        new_buffer.ap_distance = self.ap_distance
+        new_buffer.all_access_points = self.all_access_points
+        new_buffer.average_slot_distance = self.average_slot_distance
+        
+        # Copy the virtual lanes (this is the main mutable state)
+        if self.virtual_lanes is not None:
+            new_buffer.virtual_lanes = [lane.copy() for lane in self.virtual_lanes]
+        else:
+            new_buffer.virtual_lanes = None
+            
+        return new_buffer
+

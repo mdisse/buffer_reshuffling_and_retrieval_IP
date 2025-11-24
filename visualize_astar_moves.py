@@ -72,7 +72,11 @@ def get_ul_color(ul_id, current_move_step, ul_retrieval_times_map, max_urgency_w
 
 
 def ap_id_to_coords(ap_id, slot, data):
-    """Converts an access point ID and slot to its (x, y) coordinates."""
+    """Converts an access point ID and slot to its (x, y) coordinates.
+    
+    Tier numbering: Tier 1 = BACK/DEEPEST, Tier N = FRONT/CLOSEST
+    For each direction, we calculate position based on total lane length.
+    """
     vl_length = next((lane['n_slots'] for lane in data['virtual_lanes'] if lane['ap_id'] == ap_id), None)
     if vl_length is None:
         return None
@@ -80,14 +84,21 @@ def ap_id_to_coords(ap_id, slot, data):
     for ap in data['access_points']:
         if ap['ap_id'] == ap_id:
             if ap['direction'] == 'north':
-                return ap['global_x'], ap['global_y'] + 1 + vl_length - slot
+                # North: lane extends upward (increasing y), AP at bottom
+                # Tier 1 (back) is farthest up, Tier N (front) is closest to AP
+                return ap['global_x'], ap['global_y'] + vl_length - slot + 1
             elif ap['direction'] == 'south':
-                # Slot 1 is closest to the AP, so we subtract it from the AP's y-coord.
-                return ap['global_x'], ap['global_y'] - slot
+                # South: lane extends downward (decreasing y), AP at top
+                # Tier 1 (back) is farthest down, Tier N (front) is closest to AP
+                return ap['global_x'], ap['global_y'] - (vl_length - slot + 1)
             elif ap['direction'] == 'east':
-                return ap['global_x'] - slot, ap['global_y']
+                # East: lane extends leftward (decreasing x), AP at right
+                # Tier 1 (back) is farthest left, Tier N (front) is closest to AP
+                return ap['global_x'] - (vl_length - slot + 1), ap['global_y']
             elif ap['direction'] == 'west':
-                return ap['global_x'] + slot, ap['global_y']
+                # West: lane extends rightward (increasing x), AP at left
+                # Tier 1 (back) is farthest right, Tier N (front) is closest to AP
+                return ap['global_x'] + vl_length - slot + 1, ap['global_y']
     return None
 
 def parse_position(position_str):
@@ -301,7 +312,9 @@ def process_file(file):
         ul_positions = {}
         for ap_info in buffer_state:
             ap_id = ap_info['ap_id']
-            for slot_index, ul_data in enumerate(ap_info.get('stacks', [])):
+            stacks = ap_info.get('stacks', [])
+            n_slots = len(stacks)
+            for slot_index, ul_data in enumerate(stacks):
                 ul_id = None
                 priority = None
                 if isinstance(ul_data, list):
@@ -311,7 +324,10 @@ def process_file(file):
                     ul_id = ul_data
                 
                 if ul_id is not None:
-                    coords = ap_id_to_coords(ap_id, slot_index + 1, data)
+                    # Convert stack index to tier: tier 1 is at highest index (back/deepest)
+                    # tier = n_slots - slot_index
+                    slot_tier = n_slots - slot_index
+                    coords = ap_id_to_coords(ap_id, slot_tier, data)
                     if coords:
                         if coords not in ul_positions:
                             ul_positions[coords] = []

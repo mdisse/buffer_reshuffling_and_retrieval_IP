@@ -1,7 +1,8 @@
 import heapq
 import time
-import copy
 import numpy as np
+from typing import List, Dict, Optional, Tuple, Set
+from dataclasses import dataclass
 from src.examples_gen.unit_load import UnitLoad
 
 # Constants for move types
@@ -9,49 +10,307 @@ MOVE_TYPE_STORE = 'store'
 MOVE_TYPE_RETRIEVE = 'retrieve'
 MOVE_TYPE_RESHUFFLE = 'reshuffle'
 
+@dataclass
+class AStarConfig:
+    """Configuration for A* solver."""
+    verbose: bool = False
+    time_limit: float = 300.0  
+    max_reshuffle_branching: int = 5  
+    
+@dataclass 
+class MoveInfo:
+    """Represents a move in the warehouse."""
+    ul_id: int
+    move_type: str
+    from_pos: Optional[int] = None
+    to_pos: Optional[int] = None
+    from_tier: Optional[int] = None
+    to_tier: Optional[int] = None
+    
+    def to_dict(self) -> Dict:
+        """Convert to dictionary for serialization."""
+        result = {
+            'ul_id': self.ul_id,
+            'type': self.move_type
+        }
+        if self.from_pos is not None:
+            result['from_pos'] = self.from_pos
+        if self.to_pos is not None:
+            result['to_pos'] = self.to_pos
+        if self.from_tier is not None:
+            result['from_tier'] = self.from_tier
+        if self.to_tier is not None:
+            result['to_tier'] = self.to_tier
+        return result
+
+class UnitLoadManager:
+    """Manages unit load priorities and state transitions."""
+    
+    def __init__(self, unit_loads: List[UnitLoad], task_queue=None, verbose: bool = False):
+        self.verbose = verbose
+        self.unit_loads = self._initialize_unit_loads(unit_loads, task_queue)
+        self.ul_priority_map = {ul.id: ul.priority for ul in self.unit_loads}
+    
+    def _initialize_unit_loads(self, unit_loads: List[UnitLoad], task_queue) -> List[UnitLoad]:
+        """Initialize unit loads with proper priorities."""
+        if task_queue:
+            return self._apply_task_queue_priorities(unit_loads, task_queue)
+        else: 
+            raise ValueError("Task queue must be provided to initialize unit loads with priorities.")
+    
+    def _apply_task_queue_priorities(self, unit_loads: List[UnitLoad], task_queue) -> List[UnitLoad]:
+        """Apply priorities from task queue to unit loads."""
+        storage_priority_map = {}
+        retrieval_priority_map = {}
+        
+        # Extract priorities from task queue
+        for task in task_queue:
+            # Get priority using get_priority() method and check it's not None
+            task_priority = task.get_priority() if hasattr(task, 'get_priority') else getattr(task, 'priority', None)
+            
+            if task_priority is not None:
+                if "_mock" in str(task.id):
+                    real_ul_id = task.real_ul_id
+                    storage_priority_map[real_ul_id] = task_priority
+                else:
+                    retrieval_priority_map[task.id] = task_priority
+        
+        # Verify we extracted priorities from the task queue
+        if not storage_priority_map and not retrieval_priority_map:
+            raise ValueError("No priorities were extracted from the provided task queue.")
+        
+        # Apply priorities to unit loads
+        for ul in unit_loads:
+            storage_priority = storage_priority_map.get(ul.id, 999)
+            retrieval_priority = retrieval_priority_map.get(ul.id, 999)
+            
+            ul.set_storage_priority(storage_priority)
+            ul.set_retrieval_priority(retrieval_priority)
+            
+            # Set initial priority based on current state
+            if ul.is_stored:
+                ul.priority = retrieval_priority
+            else:
+                ul.priority = self._select_initial_priority(storage_priority, retrieval_priority)
+        
+        if self.verbose:
+            self._log_priority_assignments(unit_loads)
+        
+        return unit_loads
+    
+    def _select_initial_priority(self, storage_priority: int, retrieval_priority: int) -> int:
+        """Select initial priority for unit load at source."""
+        if storage_priority < 900 and retrieval_priority < 900:
+            return min(storage_priority, retrieval_priority)
+        elif storage_priority < 900:
+            return storage_priority
+        elif retrieval_priority < 900:
+            return retrieval_priority
+        else:
+            return 999
+    
+    def _log_priority_assignments(self, unit_loads: List[UnitLoad]) -> None:
+        """Log priority assignments for debugging and validate priority grouping."""
+        print(f"✅ Applied task queue priorities to {len(unit_loads)} unit loads")
+        print("  Storage and Retrieval Priorities:")
+        
+        sorted_uls = sorted(unit_loads[:15], key=lambda ul: ul.id)
+        for ul in sorted_uls:
+            storage_pri = getattr(ul, 'storage_priority', 'N/A')
+            retrieval_pri = getattr(ul, 'retrieval_priority', 'N/A')
+            current_pri = ul.priority
+            stored_status = "stored" if ul.is_stored else "at_source"
+            retrieval_end = getattr(ul, 'retrieval_end', 'N/A')
+            print(f"  UL {ul.id}: storage_p={storage_pri}, retrieval_p={retrieval_pri}, "
+                  f"current_p={current_pri}, retrieval_end={retrieval_end} ({stored_status})")
+        
+        if len(unit_loads) > 15:
+            print(f"  ... and {len(unit_loads) - 15} more")
+        
+        # Validate priority grouping: ULs with same retrieval_end should have same retrieval_priority
+        retrieval_end_to_priority = {}
+        priority_conflicts = []
+        
+        for ul in unit_loads:
+            if hasattr(ul, 'retrieval_end') and ul.retrieval_end is not None:
+                if ul.retrieval_end in retrieval_end_to_priority:
+                    expected_priority = retrieval_end_to_priority[ul.retrieval_end]
+                    if hasattr(ul, 'retrieval_priority') and ul.retrieval_priority != expected_priority:
+                        priority_conflicts.append({
+                            'ul_id': ul.id,
+                            'retrieval_end': ul.retrieval_end,
+                            'expected_priority': expected_priority,
+                            'actual_priority': ul.retrieval_priority
+                        })
+                else:
+                    if hasattr(ul, 'retrieval_priority'):
+                        retrieval_end_to_priority[ul.retrieval_end] = ul.retrieval_priority
+        
+        if priority_conflicts:
+            print("\n  ⚠️  PRIORITY GROUPING CONFLICTS DETECTED:")
+            print("  Unit loads with the SAME retrieval deadline have DIFFERENT priorities!")
+            print("  This breaks same-priority blocking detection (>= condition won't work)")
+            for conflict in priority_conflicts[:5]:  # Show first 5
+                print(f"    UL {conflict['ul_id']}: retrieval_end={conflict['retrieval_end']}, "
+                      f"priority={conflict['actual_priority']} (expected {conflict['expected_priority']})")
+            if len(priority_conflicts) > 5:
+                print(f"    ... and {len(priority_conflicts) - 5} more conflicts")
+            print("  ❌ This indicates internal priority calculation was used instead of task_queue!")
+        else:
+            print("\n  ✅ Priority grouping validated: Same retrieval_end = Same priority")
+    
+    def get_ul_by_id(self, ul_id: int) -> Optional[UnitLoad]:
+        """Get unit load by ID."""
+        for ul in self.unit_loads:
+            if ul.id == ul_id:
+                return ul
+        return None
+    
+    def get_ul_priority(self, ul_id: int) -> float:
+        """Get priority for unit load."""
+        return self.ul_priority_map.get(ul_id, float('inf'))
 class AStarNode:
-    def __init__(self, current_buffer_state, all_initial_unit_loads, unit_loads_at_sources, unit_loads_at_sinks, parent=None, move=None, g_cost=0, h_cost=0, current_time=0, tabu_list=None):
-        self.current_buffer_state = current_buffer_state
-        self.all_initial_unit_loads = all_initial_unit_loads
+    """Represents a node in the A* search tree."""
+    
+    def __init__(self, buffer_state, unit_load_manager: UnitLoadManager, 
+                 unit_loads_at_sources: List[UnitLoad], unit_loads_at_sinks: List[UnitLoad],
+                 parent=None, move: Optional[MoveInfo] = None, g_cost: float = 0, 
+                 current_time: float = 0, tabu_list: Optional[List[int]] = None,
+                 retrieval_sequence: Optional[List[int]] = None):
+        self.buffer_state = buffer_state
+        self.unit_load_manager = unit_load_manager
         self.unit_loads_at_sources = unit_loads_at_sources
         self.unit_loads_at_sinks = unit_loads_at_sinks
         self.parent = parent
         self.move = move
         self.g_cost = g_cost
-        self.h_cost = h_cost
         self.current_time = current_time
-        # The tabu_list stores the ap_id of slots that were the destination of the previous move.
+        self.weight = 1
         self.tabu_list = tabu_list if tabu_list is not None else []
+        self.retrieval_sequence = retrieval_sequence if retrieval_sequence is not None else []
+        self._h_cost: Optional[float] = None
+        
+        # Performance caching - computed lazily
+        self._stored_unit_loads: Optional[Set] = None
+        self._accessible_unit_loads: Optional[Dict] = None
+        self._blocking_moves: Optional[List] = None
+        self._empty_slots: Optional[List] = None
+        self._empty_lanes: Optional[List] = None
+        self._state_key: Optional[Tuple] = None
+        self._ul_position_map: Optional[Dict] = None
 
     @property
-    def vehicle_pos(self):
+    def vehicle_pos(self) -> Optional[int]:
+        """Get current vehicle position."""
         if self.move:
-            return self.move.get('to_pos')
+            return self.move.to_pos
         if self.parent:
             return self.parent.vehicle_pos
         return None
 
     @property
-    def f_cost(self):
-        return self.g_cost + self.h_cost
+    def h_cost(self) -> float:
+        """Get heuristic cost (lazy evaluation)."""
+        if self._h_cost is None:
+            raise ValueError("Heuristic cost not calculated")
+        return self._h_cost
+    
+    @h_cost.setter
+    def h_cost(self, value: float):
+        """Set heuristic cost."""
+        self._h_cost = value
 
-    def get_state_key(self):
-        buffer_hash = self.current_buffer_state.get_hashable_state()
-        sources_hash = tuple(ul.id for ul in self.unit_loads_at_sources)
-        sinks_hash = tuple(ul.id for ul in self.unit_loads_at_sinks)
-        # The tabu list is part of the state to differentiate nodes that are otherwise identical
-        tabu_hash = tuple(self.tabu_list)
-        return (buffer_hash, sources_hash, sinks_hash, tabu_hash)
+    @property
+    def f_cost(self) -> float:
+        """Get total cost (g + h)."""
+        return self.g_cost + self.weight * self.h_cost
 
-    def to_dict(self, ul_priority_map=None):
-        """ Creates a serializable dictionary representation of the node state. """
-        stored_uls = [ul for ul in self.all_initial_unit_loads if ul.is_stored and not ul.is_at_sink]
+    @property
+    def stored_unit_loads(self) -> Set[int]:
+        """Get all stored unit loads (cached)."""
+        if self._stored_unit_loads is None:
+            self._stored_unit_loads = self.buffer_state.get_all_stored_unit_loads()
+        return self._stored_unit_loads
+
+    @property
+    def accessible_unit_loads(self) -> Dict[int, any]:
+        """Get all accessible unit loads (cached)."""
+        if self._accessible_unit_loads is None:
+            self._accessible_unit_loads = self.buffer_state.get_accessible_unit_loads()
+        return self._accessible_unit_loads
+
+    @property
+    def blocking_moves(self) -> List[Dict]:
+        """Get all blocking moves (cached)."""
+        if self._blocking_moves is None:
+            self._blocking_moves = self.buffer_state.get_all_blocking_moves(self.unit_load_manager.unit_loads)
+        return self._blocking_moves
+
+    @property
+    def empty_slots(self) -> List:
+        """Get all empty slots (cached)."""
+        if self._empty_slots is None:
+            self._empty_slots = self.buffer_state.get_all_empty_slots()
+        return self._empty_slots
+
+    @property
+    def empty_lanes(self) -> List:
+        """Get all empty lanes (cached)."""
+        if self._empty_lanes is None:
+            self._empty_lanes = self.buffer_state.get_all_empty_lanes()
+        return self._empty_lanes
+
+    @property
+    def ul_position_map(self) -> Dict[int, Tuple]:
+        """Get map of ul_id -> (lane, stack_idx) (cached)."""
+        if self._ul_position_map is None:
+            self._ul_position_map = {}
+            for lane in self.buffer_state.virtual_lanes:
+                if not lane.is_sink_or_source():
+                    for stack_idx, ul_id in enumerate(lane.stacks):
+                        if ul_id != 0:
+                            self._ul_position_map[ul_id] = (lane, stack_idx)
+        return self._ul_position_map
+
+    def get_state_key(self) -> Tuple:
+        """Get hashable state key for duplicate detection (cached)."""
+        if self._state_key is None:
+            buffer_hash = self.buffer_state.get_hashable_state()
+            sources_hash = tuple(ul.id for ul in self.unit_loads_at_sources)
+            sinks_hash = tuple(ul.id for ul in self.unit_loads_at_sinks)
+            self._state_key = (buffer_hash, sources_hash, sinks_hash)
+        return self._state_key
+
+    def to_dict(self) -> Dict:
+        """Create serializable dictionary representation."""
+        stored_uls = [ul for ul in self.unit_load_manager.unit_loads 
+                     if ul.is_stored and not ul.is_at_sink]
         
-        ul_map = {ul.id: ul for ul in self.all_initial_unit_loads}
+        buffer_lanes_state = self._create_buffer_state_dict()
+        serializable_move = self._create_serializable_move()
 
+        return {
+            'move': serializable_move,
+            'g_cost': self.g_cost,
+            'h_cost': self.h_cost,
+            'f_cost': self.f_cost,
+            'buffer_state': buffer_lanes_state,
+            'unit_loads_at_sources': sorted([ul.id for ul in self.unit_loads_at_sources]),
+            'unit_loads_at_sinks': sorted([ul.id for ul in self.unit_loads_at_sinks]),
+            'stored_unit_loads': sorted([ul.id for ul in stored_uls])
+        }
+    
+    def _create_buffer_state_dict(self) -> List[Dict]:
+        """Create buffer state dictionary for serialization."""
         buffer_lanes_state = []
-        if self.current_buffer_state.virtual_lanes:
-            for lane in self.current_buffer_state.virtual_lanes:
+        ul_map = {ul.id: ul for ul in self.unit_load_manager.unit_loads}
+        
+        # Create sets for efficient lookup
+        source_ids = {ul.id for ul in self.unit_loads_at_sources}
+        sink_ids = {ul.id for ul in self.unit_loads_at_sinks}
+        
+        if self.buffer_state.virtual_lanes:
+            for lane in self.buffer_state.virtual_lanes:
                 stack_with_priority = []
                 for ul_id in lane.stacks.tolist():
                     if ul_id == 0:
@@ -59,13 +318,19 @@ class AStarNode:
                     else:
                         unit_load = ul_map.get(ul_id)
                         if unit_load:
-                            if unit_load.is_stored:
+                            # Determine priority based on current state
+                            if ul_id in source_ids:
+                                # At source, use storage priority
+                                p = unit_load.storage_priority
+                            elif ul_id in sink_ids:
+                                # At sink, use retrieval priority
                                 p = unit_load.retrieval_priority
                             else:
-                                p = unit_load.storage_priority
+                                # In buffer, use retrieval priority
+                                p = unit_load.retrieval_priority
                             stack_with_priority.append([ul_id, f"P{p}"])
                         else:
-                            p = ul_priority_map.get(ul_id, '?') if ul_priority_map else '?'
+                            p = self.unit_load_manager.ul_priority_map.get(ul_id, '?')
                             stack_with_priority.append([ul_id, f"P{p}"])
 
                 buffer_lanes_state.append({
@@ -73,223 +338,591 @@ class AStarNode:
                     'stacks': stack_with_priority
                 })
         
-        serializable_move = {}
-        if self.move:
-            serializable_move = self.move.copy()
-            for key, value in self.move.items():
-                if hasattr(value, 'ap_id'):
-                    serializable_move[key] = value.ap_id
-                else:
-                    serializable_move[key] = value
+        return buffer_lanes_state
+    
+    def _create_serializable_move(self) -> Dict:
+        """Create serializable move dictionary."""
+        if not self.move:
+            return {}
+        
+        return self.move.to_dict()
 
-        return {
-            'move': serializable_move,
-            'g_cost': self.g_cost,
-            'h_cost': self.h_cost,
-            'f_cost': self.f_cost,
-            'current_time': self.current_time,
-            'buffer_state': buffer_lanes_state,
-            'unit_loads_at_sources': sorted([ul.id for ul in self.unit_loads_at_sources]),
-            'unit_loads_at_sinks': sorted([ul.id for ul in self.unit_loads_at_sinks]),
-            'stored_unit_loads': sorted([ul.id for ul in stored_uls])
-        }
-
-    def __lt__(self, other):
-        # Tie-break on g_cost (travel time) if f_cost is equal
+    def __lt__(self, other) -> bool:
+        """Compare nodes for priority queue (lower f_cost has higher priority)."""
         if self.f_cost == other.f_cost:
             return self.g_cost < other.g_cost
         return self.f_cost < other.f_cost
 
 
-class AStarSolver:
-    def __init__(self, initial_buffer_state, all_unit_loads, dist_matrix, handling_time, instance=None, verbose=False, time_limit=300, task_queue=None):
-        self.initial_buffer_state = initial_buffer_state
-        self.all_unit_loads = all_unit_loads
+class DistanceCalculator:
+    """Handles distance and cost calculations."""
+    
+    def __init__(self, dist_matrix: np.ndarray, handling_time: float, 
+                 initial_buffer_state, verbose: bool = False):
         self.dist_matrix = dist_matrix
         self.handling_time = handling_time
-        self.instance = instance
         self.verbose = verbose
-        self.time_limit = time_limit
-        self.task_queue = task_queue
-        self.start_time = None
-        self.unit_load_objects = self._initialize_unit_load_objects()
-        self.ul_priority_map = {ul.id: ul.priority for ul in self.unit_load_objects}
-        self.source_ap = self._find_source_ap()
-        self.sink_ap = self._find_sink_ap()
-        self.vehicle_start_pos = self.sink_ap
-        self._average_source_to_buffer_dist = None
-        self._average_buffer_to_sink_dist = None
-        self._average_reshuffle_dist = None
-        self._calculate_average_distances()
-
-    def _calculate_average_distances(self):
-        buffer_lanes = [lane for lane in self.initial_buffer_state.virtual_lanes if not lane.is_source and not lane.is_sink]
-        if not buffer_lanes:
-            self._average_source_to_buffer_dist = 10
-            self._average_buffer_to_sink_dist = 10
-            self._average_reshuffle_dist = 10
-            return
-
-        source_dists = [self.dist_matrix[self.source_ap][lane.ap_id] for lane in buffer_lanes]
-        self._average_source_to_buffer_dist = np.mean(source_dists) if source_dists else 10
-
-        sink_dists = [self.dist_matrix[lane.ap_id][self.sink_ap] for lane in buffer_lanes]
-        self._average_buffer_to_sink_dist = np.mean(sink_dists) if sink_dists else 10
+        self.source_ap = self._find_source_ap(initial_buffer_state)
+        self.sink_ap = self._find_sink_ap(initial_buffer_state)
+        self._calculate_average_distances(initial_buffer_state)
         
-        reshuffle_dists = []
-        if len(buffer_lanes) > 1:
-            for lane1 in buffer_lanes:
-                for lane2 in buffer_lanes:
-                    if lane1.ap_id != lane2.ap_id:
-                        reshuffle_dists.append(self.dist_matrix[lane1.ap_id][lane2.ap_id])
-            self._average_reshuffle_dist = np.mean(reshuffle_dists) if reshuffle_dists else 20
-        else:
-            self._average_reshuffle_dist = 20
-
-    def _find_source_ap(self):
-        for lane in self.initial_buffer_state.virtual_lanes:
+        # Store n_slots mapping for tier depth calculations
+        # Maps ap_id -> number of slots in that lane
+        self.lane_n_slots = {}
+        for lane in initial_buffer_state.virtual_lanes:
+            n_slots = len(lane.stacks) if hasattr(lane, 'stacks') else len(lane.get_tiers())
+            self.lane_n_slots[lane.ap_id] = n_slots
+    
+    def _find_source_ap(self, buffer_state) -> Optional[int]:
+        """Find source access point."""
+        for lane in buffer_state.virtual_lanes:
             if lane.is_source:
                 return lane.ap_id
         if self.verbose:
             print("Warning: Source AP not found in buffer state.")
         return None
 
-    def _find_sink_ap(self):
-        for lane in self.initial_buffer_state.virtual_lanes:
+    def _find_sink_ap(self, buffer_state) -> Optional[int]:
+        """Find sink access point."""
+        for lane in buffer_state.virtual_lanes:
             if lane.is_sink:
                 return lane.ap_id
         if self.verbose:
             print("Warning: Sink AP not found in buffer state.")
         return None
+    
+    def _calculate_average_distances(self, buffer_state) -> None:
+        """Calculate average distances for heuristic calculations."""
+        buffer_lanes = [lane for lane in buffer_state.virtual_lanes 
+                       if not lane.is_source and not lane.is_sink]
+        
+        if not buffer_lanes:
+            self.avg_source_to_buffer = 10
+            self.avg_buffer_to_sink = 10
+            self.avg_reshuffle = 10
+            return
 
-    def _initialize_unit_load_objects(self):
-        if self.all_unit_loads and hasattr(next(iter(self.all_unit_loads)), 'priority'):
-            return list(self.all_unit_loads)
+        # Source to buffer distances
+        source_dists = [self.dist_matrix[self.source_ap][lane.ap_id] for lane in buffer_lanes]
+        self.avg_source_to_buffer = np.mean(source_dists) if source_dists else 10
+
+        # Buffer to sink distances
+        sink_dists = [self.dist_matrix[lane.ap_id][self.sink_ap] for lane in buffer_lanes]
+        self.avg_buffer_to_sink = np.mean(sink_dists) if sink_dists else 10
+        
+        # Reshuffle distances
+        reshuffle_dists = []
+        if len(buffer_lanes) > 1:
+            for lane1 in buffer_lanes:
+                for lane2 in buffer_lanes:
+                    if lane1.ap_id != lane2.ap_id:
+                        reshuffle_dists.append(self.dist_matrix[lane1.ap_id][lane2.ap_id])
+            self.avg_reshuffle = np.mean(reshuffle_dists) if reshuffle_dists else 20
+        else:
+            self.avg_reshuffle = 20
+    
+    def calculate_move_cost(self, move_info: MoveInfo) -> float:
+        """
+        Calculate cost for a specific move.
+        
+        Tier numbering: Tier 1 = BACK/DEEPEST, Tier N = FRONT/CLOSEST to access point
+        For a lane with n_slots:
+        - Tier 1 requires (n_slots - 1) moves to reach access point
+        - Tier n requires (n_slots - n) moves to reach access point
+        
+        Total distance = tier_depth_from + lane_distance + tier_depth_to
+        where tier_depth = n_slots - tier_number
+        """
+        # Calculate tier depth cost (distance from tier to access point)
+        # Tier 1 = deepest, requires most moves to reach access point
+        from_tier_depth = 0
+        to_tier_depth = 0
+        
+        if move_info.from_tier and move_info.from_pos in self.lane_n_slots:
+            n_slots_from = self.lane_n_slots[move_info.from_pos]
+            from_tier_depth = n_slots_from - move_info.from_tier
+        
+        if move_info.to_tier and move_info.to_pos in self.lane_n_slots:
+            n_slots_to = self.lane_n_slots[move_info.to_pos]
+            to_tier_depth = n_slots_to - move_info.to_tier
+        
+        tier_distance = from_tier_depth + to_tier_depth
+        
+        if move_info.move_type == MOVE_TYPE_STORE:
+            lane_distance = (self.dist_matrix[self.source_ap][move_info.to_pos] + 
+                            self.dist_matrix[move_info.to_pos][self.sink_ap])
+            travel_time = lane_distance + tier_distance
+            return travel_time + 4 * self.handling_time
+        
+        elif move_info.move_type == MOVE_TYPE_RETRIEVE:
+            lane_distance = self.dist_matrix[move_info.from_pos][self.sink_ap]
+            travel_time = lane_distance + tier_distance
+            return travel_time + 2* self.handling_time
+        
+        elif move_info.move_type == MOVE_TYPE_RESHUFFLE:
+            lane_distance = self.dist_matrix[move_info.from_pos][move_info.to_pos]
+            travel_time = lane_distance + tier_distance
+            return travel_time + 2 * self.handling_time
+        
+        return 0.0
+
+class HeuristicCalculator:
+    """Calculates heuristic costs for A* search."""
+    
+    def __init__(self, distance_calc: DistanceCalculator, fleet_size: int = 3):
+        self.distance_calc = distance_calc
+        self.fleet_size = fleet_size
+        self._ap_cost_cache = {}
+        self._all_retrieval_uls = None
+        
+        # Precompute AP costs
+        source_ap = self.distance_calc.source_ap
+        sink_ap = self.distance_calc.sink_ap
+        if source_ap is not None and sink_ap is not None:
+            for ap_id in range(len(self.distance_calc.dist_matrix)):
+                source_to_slot = self.distance_calc.dist_matrix[source_ap][ap_id]
+                slot_to_sink = self.distance_calc.dist_matrix[ap_id][sink_ap]
+                self._ap_cost_cache[ap_id] = source_to_slot + slot_to_sink
+    
+    def _calculate_storage_cost(self, source_ids: Set[int], empty_slots: List) -> float:
+        """
+        Calculate cost for storing unit loads from source to buffer.
+        
+        Uses a greedy best-match heuristic: estimates the cost by assigning each
+        remaining UL to the best (cheapest) available slot. This is admissible because
+        it assumes optimal greedy assignment, which is a lower bound on actual cost.
+        
+        This approach avoids the pitfall of simple averaging, which can incorrectly
+        prefer using expensive slots (to remove them from the average) over cheaper ones.
+        """
+        if len(source_ids) == 0:
+            return 0.0
+        
+        if not empty_slots:
+            # Fallback: if no empty slots, use global average (shouldn't happen in valid states)
+            avg_dist = self.distance_calc.avg_source_to_buffer + self.distance_calc.avg_buffer_to_sink
+            return len(source_ids) * (avg_dist + 4 * self.distance_calc.handling_time)
+        
+        source_ap = self.distance_calc.source_ap
+        sink_ap = self.distance_calc.sink_ap
+        
+        # Calculate round-trip cost for each available slot
+        slot_costs = []
+        for slot in empty_slots:
+            if slot.ap_id in self._ap_cost_cache:
+                slot_costs.append(self._ap_cost_cache[slot.ap_id])
+            else:
+                source_to_slot = self.distance_calc.dist_matrix[source_ap][slot.ap_id]
+                slot_to_sink = self.distance_calc.dist_matrix[slot.ap_id][sink_ap]
+                round_trip = source_to_slot + slot_to_sink
+                slot_costs.append(round_trip)
+        
+        # Sort to get best (cheapest) slots first
+        slot_costs.sort()
+        
+        # Greedy assignment: assign each UL to best available slot
+        num_uls_to_store = len(source_ids)
+        
+        if num_uls_to_store <= len(slot_costs):
+            # Use the N cheapest slots
+            total_cost = sum(slot_costs[:num_uls_to_store])
+        else:
+            # More ULs than slots - use all slots + fallback for remainder
+            total_cost = sum(slot_costs)
+            remaining = num_uls_to_store - len(slot_costs)
+            avg_dist = self.distance_calc.avg_source_to_buffer + self.distance_calc.avg_buffer_to_sink
+            total_cost += remaining * avg_dist
+        
+        # Add handling time (4x for store operations)
+        return total_cost + num_uls_to_store * 4 * self.distance_calc.handling_time
+    
+    def _find_ul_position(self, ul_id: int, buffer_state, node=None) -> Tuple[Optional[float], int]:
+        """
+        Find the lane distance and tier depth for a stored unit load.
+        
+        Returns:
+            Tuple of (lane_distance to sink, tier_depth in lane)
+            Returns (None, 0) if not found
+        """
+        # Try to use cached map from node
+        if node and hasattr(node, 'ul_position_map'):
+            if ul_id in node.ul_position_map:
+                lane, stack_idx = node.ul_position_map[ul_id]
+                sink_ap = self.distance_calc.sink_ap
+                lane_distance = self.distance_calc.dist_matrix[lane.ap_id][sink_ap]
+                return (lane_distance, stack_idx)
+            return (None, 0)
+
+        sink_ap = self.distance_calc.sink_ap
+        
+        for lane in buffer_state.virtual_lanes:
+            if not lane.is_sink_or_source():
+                for stack_idx, stack_item_id in enumerate(lane.stacks):
+                    if stack_item_id == ul_id:
+                        lane_distance = self.distance_calc.dist_matrix[lane.ap_id][sink_ap]
+                        # tier_depth = stack_idx (distance from AP to this position)
+                        return (lane_distance, stack_idx)
+        
+        return (None, 0)
+    
+    def _calculate_retrieval_cost(self, stored_ul_ids: Set[int], sink_ids: Set[int], 
+                                   node_or_buffer_state) -> float:
+        """Calculate cost for retrieving stored unit loads to sink."""
+        stored_not_retrieved_ids = stored_ul_ids - sink_ids
+        total_cost = 0.0
+        
+        # Handle both node and buffer_state for backward compatibility if needed
+        if hasattr(node_or_buffer_state, 'buffer_state'):
+            node = node_or_buffer_state
+            buffer_state = node.buffer_state
+        else:
+            node = None
+            buffer_state = node_or_buffer_state
+        
+        for ul_id in stored_not_retrieved_ids:
+            lane_distance, tier_depth = self._find_ul_position(ul_id, buffer_state, node)
+            
+            if lane_distance is not None:
+                # Exact cost: lane distance + tier depth + handling time
+                total_cost += lane_distance + tier_depth + 2 * self.distance_calc.handling_time
+            else:
+                # Fallback to average if position not found
+                total_cost += self.distance_calc.avg_buffer_to_sink + 2 * self.distance_calc.handling_time
+        
+        return total_cost
+    
+    def _calculate_reshuffle_cost_to_lane(self, from_tier_depth: int, from_ap: int, 
+                                          to_lane) -> float:
+        """
+        Calculate the cost to reshuffle a UL from current position to a specific empty lane.
+        
+        Args:
+            from_tier_depth: Tier depth of blocker in current lane (stack_idx)
+            from_ap: Access point ID of the source lane
+            to_lane: Destination lane (must be empty)
+        
+        Returns:
+            Total reshuffle cost including tier depths and handling time
+        """
+        to_ap = to_lane.ap_id
+        lane_distance = self.distance_calc.dist_matrix[from_ap][to_ap]
+        
+        # For empty lane, UL is placed at deepest tier (Tier 1)
+        # tier_to_depth = n_slots - 1
+        to_tier_depth = len(to_lane.stacks) - 1
+        
+        # Total: tier_from + lane_distance + tier_to + handling
+        return from_tier_depth + lane_distance + to_tier_depth + 2 * self.distance_calc.handling_time
+    
+    def _calculate_blocking_cost(self, blocking_moves: List[Dict], empty_lanes: List) -> float:
+        """
+        Calculate cost for resolving blocking situations via reshuffles.
+        
+        Blocking occurs when a lower-priority UL is physically in front of a higher-priority UL,
+        OR when ULs with the same priority are in the same lane.
+        """
+        if len(blocking_moves) == 0:
+            return 0.0
+        
+        # Fleet-size-dependent blocking multiplier: 10 / fleet_size
+        BLOCKING_MULTIPLIER = 5.0 / self.fleet_size
+        
+        total_cost = 0.0
+        base_costs = []  # Track base costs (before multiplier) for analysis
+        
+        for blocking_move in blocking_moves:
+            blocker_ul_id = blocking_move['ul_id']
+            from_lane = blocking_move['from_lane']
+            from_ap = from_lane.ap_id
+            
+            # Find tier depth of the blocking UL
+            tier_depth = 0
+            for stack_idx, ul_id in enumerate(from_lane.stacks):
+                if ul_id == blocker_ul_id:
+                    tier_depth = stack_idx
+                    break
+            
+            if empty_lanes:
+                # Find best empty lane (minimum cost)
+                best_cost = float('inf')
+                for to_lane in empty_lanes:
+                    if to_lane.ap_id != from_ap:  # Don't reshuffle to same lane
+                        cost = self._calculate_reshuffle_cost_to_lane(tier_depth, from_ap, to_lane)
+                        best_cost = min(best_cost, cost)
+                
+                if best_cost < float('inf'):
+                    base_costs.append(best_cost)
+                    total_cost += best_cost * BLOCKING_MULTIPLIER
+                else:
+                    # No valid reshuffling lane found - use average
+                    avg_cost = self.distance_calc.avg_reshuffle + 2 * self.distance_calc.handling_time
+                    base_cost = avg_cost + tier_depth
+                    base_costs.append(base_cost)
+                    total_cost += base_cost * BLOCKING_MULTIPLIER
+            else:
+                # No empty lanes available - blocking is VERY expensive
+                # Must wait for retrieval to free up space
+                avg_cost = self.distance_calc.avg_reshuffle + 2 * self.distance_calc.handling_time
+                base_cost = (avg_cost + tier_depth) * 2.0
+                base_costs.append(base_cost)
+                total_cost += base_cost * BLOCKING_MULTIPLIER
+        
+        # Debug output if enabled
+        import os
+        if os.environ.get('DEBUG_BLOCKING_COSTS') == '1' and base_costs:
+            print(f"    [BLOCKING] {len(blocking_moves)} blocks, multiplier={BLOCKING_MULTIPLIER:.2f}x, "
+                  f"base_costs: min={min(base_costs):.1f}, max={max(base_costs):.1f}, "
+                  f"avg={sum(base_costs)/len(base_costs):.1f}, total={total_cost:.1f}")
+        
+        return total_cost
+    
+    def _calculate_priority_violation_penalty(self, node: AStarNode, source_ids: Set[int], 
+                                               sink_ids: Set[int]) -> float:
+        """
+        Calculate penalty for priority violations:
+        1. Out-of-order retrievals: comparing actual retrieval sequence against ideal
+        2. Premature retrievals: retrieving before higher-priority storage tasks are complete
+        
+        All priorities are on the same scale (1, 2, 3, ...) where lower = higher priority.
+        """
+        total_penalty = 0.0
+        
+        # PART 1: Penalty for out-of-order retrievals
+        # Build a complete priority map of ALL ULs that need retrieval (not just retrieved ones)
+        # Use cached map if available
+        if self._all_retrieval_uls is None:
+            self._all_retrieval_uls = {}
+            for ul in node.unit_load_manager.unit_loads:
+                if ul.retrieval_priority is not None and ul.retrieval_priority < 900:
+                    self._all_retrieval_uls[ul.id] = ul.retrieval_priority
+        
+        all_retrieval_uls = self._all_retrieval_uls
+        
+        if node.unit_loads_at_sinks and all_retrieval_uls:
+            # Get the actual sequence of retrieved ULs (in order they were retrieved)
+            # Use cached sequence from node
+            actual_sequence = node.retrieval_sequence
+            
+            # Count inversions in two ways:
+            # 1. Between already-retrieved ULs (past inversions)
+            # 2. Between retrieved ULs and pending ULs (skipped higher-priority items)
+            num_inversions = 0
+            
+            # Type 1: Inversions between already-retrieved ULs
+            if len(actual_sequence) >= 2:
+                for i in range(len(actual_sequence)):
+                    for j in range(i + 1, len(actual_sequence)):
+                        ul_i = actual_sequence[i]
+                        ul_j = actual_sequence[j]
+                        
+                        # Skip if either UL doesn't have a retrieval priority
+                        if ul_i not in all_retrieval_uls or ul_j not in all_retrieval_uls:
+                            continue
+                        
+                        priority_i = all_retrieval_uls[ul_i]
+                        priority_j = all_retrieval_uls[ul_j]
+                        
+                        # Inversion if different priorities and ul_i retrieved before ul_j but has lower priority
+                        if priority_i != priority_j and priority_i > priority_j:
+                            num_inversions += 1
+            
+            # Type 2: Inversions with pending retrievals (retrieved low-priority before high-priority pending)
+            # Get all ULs that still need to be retrieved (not at sink yet)
+            retrieved_ids = set(actual_sequence)
+            pending_ul_ids = set(all_retrieval_uls.keys()) - retrieved_ids
+            
+            for retrieved_id in retrieved_ids:
+                if retrieved_id not in all_retrieval_uls:
+                    continue
+                retrieved_priority = all_retrieval_uls[retrieved_id]
+                
+                # Check if we retrieved this UL while skipping higher-priority pending ones
+                for pending_id in pending_ul_ids:
+                    if pending_id not in all_retrieval_uls:
+                        continue
+                    pending_priority = all_retrieval_uls[pending_id]
+                    
+                    # If retrieved UL has lower priority than a pending UL, that's an inversion
+                    if retrieved_priority != pending_priority and retrieved_priority > pending_priority:
+                        num_inversions += 1
+            
+            # Apply penalty per inversion
+            INVERSION_PENALTY_FACTOR = 100.0 * self.distance_calc.avg_buffer_to_sink
+            total_penalty += num_inversions * INVERSION_PENALTY_FACTOR
+        
+        # PART 2: Penalty for premature retrievals (retrieving before higher-priority storage)
+        # Check if any retrieved UL had lower priority than pending storage tasks at the time
+        if node.unit_loads_at_sinks:
+            # For each retrieved UL, check if there were higher-priority storage tasks waiting
+            num_premature_retrievals = 0
+            
+            # Get all retrieved UL IDs
+            retrieved_ul_ids = {ul.id for ul in node.unit_loads_at_sinks}
+            
+            # For each retrieved UL, check its retrieval priority
+            for retrieved_ul_id in retrieved_ul_ids:
+                retrieved_ul = node.unit_load_manager.get_ul_by_id(retrieved_ul_id)
+                if not retrieved_ul or not retrieved_ul.retrieval_priority or retrieved_ul.retrieval_priority >= 900:
+                    continue
+                
+                # Check if there are ULs at source with higher-priority storage tasks
+                for ul_at_source in node.unit_loads_at_sources:
+                    if (hasattr(ul_at_source, 'storage_priority') and
+                        ul_at_source.storage_priority is not None and
+                        ul_at_source.storage_priority < 900 and
+                        ul_at_source.storage_priority < retrieved_ul.retrieval_priority):
+                        # This retrieval happened before a higher-priority storage task
+                        num_premature_retrievals += 1
+                        break  # Count each retrieval only once
+            
+            # Apply penalty for premature retrievals
+            PREMATURE_PENALTY_FACTOR = 20.0 * self.distance_calc.avg_buffer_to_sink
+            total_penalty += num_premature_retrievals * PREMATURE_PENALTY_FACTOR
+        
+        return total_penalty
+    
+    def calculate_h_cost(self, node: AStarNode) -> float:
+        """
+        Calculate heuristic cost for the node.
+        
+        The h_cost estimates the remaining work required to complete all tasks:
+        1. Storage cost: Moving ULs from source to buffer
+        2. Retrieval cost: Moving stored ULs from buffer to sink
+        3. Blocking cost: Reshuffling ULs that block required retrievals
+           (includes same-priority blocking detected by buffer.get_all_blocking_moves())
+        4. Priority violation penalty: Penalizing out-of-order retrievals by counting
+           inversions in the actual vs ideal retrieval sequence
+        5. Priority blocking penalty: Penalizing when lower-priority ULs block higher-priority ones
+        """
+        # Create sets for quick lookups
+        source_ids = {ul.id for ul in node.unit_loads_at_sources}
+        sink_ids = {ul.id for ul in node.unit_loads_at_sinks}
+        
+        # Calculate cost components
+        storage_cost = self._calculate_storage_cost(source_ids, node.empty_slots)
+        retrieval_cost = self._calculate_retrieval_cost(node.stored_unit_loads, sink_ids, node)
+        blocking_cost = self._calculate_blocking_cost(node.blocking_moves, node.empty_lanes)
+        priority_penalty = self._calculate_priority_violation_penalty(node, source_ids, sink_ids)
+        priority_blocking_penalty = self._calculate_priority_blocking_penalty(node, sink_ids)
+        
+        return storage_cost + retrieval_cost + blocking_cost + priority_penalty + priority_blocking_penalty
+    
+    def _calculate_priority_blocking_penalty(self, node: AStarNode, sink_ids: Set[int]) -> float:
+        """
+        Calculate penalty for lower-priority ULs blocking higher-priority ones in the buffer.
+        
+        This penalizes states where a lower-priority UL is in front of (blocking) a higher-priority UL
+        in the same lane.
+        """
+        penalty = 0.0
+        BLOCKING_PENALTY_FACTOR = 50.0 * self.distance_calc.avg_buffer_to_sink
+        
+        # Check each lane in the buffer
+        for lane in node.buffer_state.virtual_lanes:
+            # Build list of (ul_id, tier, priority) for ULs in this lane
+            uls_in_lane = []
+            for tier_idx, ul_id in enumerate(lane.stacks):
+                if ul_id == 0 or ul_id is None or ul_id in sink_ids:
+                    continue
+                
+                ul = node.unit_load_manager.get_ul_by_id(ul_id)
+                if not ul:
+                    continue
+                
+                # Calculate tier number (tier 1 = deepest, higher tier = closer to access)
+                tier = len(lane.stacks) - tier_idx
+                
+                # Get retrieval priority
+                priority = getattr(ul, 'retrieval_priority', 999)
+                uls_in_lane.append((ul_id, tier, priority))
+            
+            # Check for blocking: UL with higher tier (closer to front) blocks UL with lower tier (deeper)
+            for i, (ul_id_i, tier_i, priority_i) in enumerate(uls_in_lane):
+                for ul_id_j, tier_j, priority_j in uls_in_lane[i+1:]:
+                    # If ul_i is in front of ul_j (higher tier) but has same or lower priority (higher/equal number)
+                    # This includes same-priority blocking (>=) which still requires reshuffling
+                    if tier_i > tier_j and priority_i >= priority_j and priority_j < 900:
+                        # Same or lower-priority UL is blocking higher/equal-priority UL
+                        penalty += BLOCKING_PENALTY_FACTOR
+        
+        return penalty
+
+class AStarSolver:
+    """Main A* solver for warehouse optimization."""
+    
+    def __init__(self, initial_buffer_state, all_unit_loads, dist_matrix, handling_time, 
+                 instance=None, config: Optional[AStarConfig] = None, task_queue=None,
+                 verbose: Optional[bool] = None, time_limit: Optional[float] = None):
+        # Handle backward compatibility with old parameter names
+        if config is None:
+            config = AStarConfig(
+                verbose=verbose if verbose is not None else False,
+                time_limit=time_limit if time_limit is not None else 300.0
+            )
+        elif verbose is not None or time_limit is not None:
+            # If config is provided but old params are also given, update config
+            if verbose is not None:
+                config.verbose = verbose
+            if time_limit is not None:
+                config.time_limit = time_limit
+        
+        self.config = config
+        self.initial_buffer_state = initial_buffer_state
+        self.instance = instance
+        self.task_queue = task_queue
+        self.start_time = None
+        self.heuristic_cache = {}  # Cache for heuristic calculations
+        
+        # Use aggressive configuration for all problem sizes
+        self.config.max_reshuffle_branching = 5
+        
+        # Initialize components
+        self.unit_load_manager = UnitLoadManager(
+            self._initialize_unit_load_objects(all_unit_loads), 
+            task_queue, 
+            self.config.verbose
+        )
+        self.distance_calc = DistanceCalculator(
+            dist_matrix, handling_time, initial_buffer_state, self.config.verbose
+        )
+        
+        # Get fleet size from instance, default to 3 if not available
+        fleet_size = 3
+        if instance and hasattr(instance, 'get_fleet_size'):
+            fleet_size = instance.get_fleet_size()
+        
+        self.fleet_size = fleet_size  # Store for tabu tenure
+        self.heuristic_calc = HeuristicCalculator(self.distance_calc, fleet_size)
+        self.move_generator = MoveGenerator(self.distance_calc, self.config, self.unit_load_manager)
+        
+        if self.config.verbose:
+            print(f"A* solver initialized with {len(self.unit_load_manager.unit_loads)} unit loads.")
+            print(f"  Fleet size: {self.fleet_size} (tabu tenure will be {self.fleet_size - 1})")
+
+    def _initialize_unit_load_objects(self, all_unit_loads) -> List[UnitLoad]:
+        """Initialize unit load objects from various input formats."""
+        if all_unit_loads and hasattr(next(iter(all_unit_loads)), 'priority'):
+            return list(all_unit_loads)
 
         if self.instance and self.instance.get_unit_loads():
-            return self._create_unit_loads_from_instance()
+            return self._create_unit_loads_from_instance(all_unit_loads)
 
-        return self._create_mock_unit_loads()
+        return self._create_mock_unit_loads(all_unit_loads)
 
-    def _create_unit_loads_from_instance(self):
+    def _create_unit_loads_from_instance(self, all_unit_loads) -> List[UnitLoad]:
+        """Create unit loads from instance data."""
         instance_unit_loads = self.instance.get_unit_loads()
 
-        if isinstance(self.all_unit_loads, set):
-            filtered_uls = [ul for ul in instance_unit_loads if ul.id in self.all_unit_loads]
+        if isinstance(all_unit_loads, set):
+            return [ul for ul in instance_unit_loads if ul.id in all_unit_loads]
         else:
-            filtered_uls = instance_unit_loads
+            return instance_unit_loads
 
-        # If task_queue is provided, use its priority mapping instead of creating our own
-        if self.task_queue:
-            return self._apply_task_queue_priorities(filtered_uls)
-        else:
-            return self._apply_internal_priorities(filtered_uls)
-
-    def _apply_task_queue_priorities(self, filtered_uls):
-        """
-        Apply priorities from the task queue to unit loads.
-        This uses the priority logic from create_task_queue function.
-        """
-        # Create mappings from unit load IDs to their storage and retrieval priorities
-        storage_priority_map = {}
-        retrieval_priority_map = {}
-        
-        for task in self.task_queue:
-            if hasattr(task, 'priority'):
-                if "_mock" in str(task.id):
-                    # Storage task - map to real unit load ID
-                    real_ul_id = task.real_ul_id
-                    storage_priority_map[real_ul_id] = task.priority
-                else:
-                    # Retrieval task - use task ID directly
-                    retrieval_priority_map[task.id] = task.priority
-        
-        # Apply priorities to unit loads
-        for ul in filtered_uls:
-            storage_priority = storage_priority_map.get(ul.id, 999)  # Default to high number if not found
-            retrieval_priority = retrieval_priority_map.get(ul.id, 999)
-            
-            # Set specific storage and retrieval priorities
-            ul.set_storage_priority(storage_priority)
-            ul.set_retrieval_priority(retrieval_priority)
-            
-            # Set the initial general .priority attribute based on current state and available priorities
-            if ul.is_stored:
-                # Already stored, use retrieval priority
-                ul.priority = retrieval_priority
-            else:
-                # At source - use the minimum priority (highest importance) between storage and retrieval
-                if storage_priority < 900 and retrieval_priority < 900:
-                    ul.priority = min(storage_priority, retrieval_priority)
-                elif storage_priority < 900:
-                    ul.priority = storage_priority
-                elif retrieval_priority < 900:
-                    ul.priority = retrieval_priority
-                else:
-                    ul.priority = 999  # No valid priorities found
-        
-        if self.verbose:
-            print(f"Applied task queue priorities to {len(filtered_uls)} unit loads")
-            print("  Storage and Retrieval Priorities:")
-            # Sort by unit load ID for consistent output
-            sorted_uls = sorted(filtered_uls[:15], key=lambda ul: ul.id)
-            for ul in sorted_uls:  
-                storage_pri = getattr(ul, 'storage_priority', 'N/A')
-                retrieval_pri = getattr(ul, 'retrieval_priority', 'N/A')
-                current_pri = ul.priority
-                stored_status = "stored" if ul.is_stored else "at_source"
-                print(f"  UL {ul.id}: storage_p={storage_pri}, retrieval_p={retrieval_pri}, current_p={current_pri} ({stored_status})")
-            if len(filtered_uls) > 15:
-                print(f"  ... and {len(filtered_uls) - 15} more")
-        
-        return filtered_uls
-
-    def _apply_internal_priorities(self, filtered_uls):
-        """
-        Apply priorities using the original A* internal logic.
-        This is a fallback when no task queue is provided.
-        """
-        # --- NEW PRIORITY LOGIC ---
-        # Create a single list of all tasks (storage and retrieval)
-        all_tasks = []
-        for ul in filtered_uls:
-            # Each UL has a retrieval task
-            all_tasks.append({'ul_id': ul.id, 'type': 'retrieval', 'due': ul.retrieval_end if ul.retrieval_end is not None else float('inf')})
-            # If not stored initially, it also has a storage task
-            if not ul.is_stored:
-                all_tasks.append({'ul_id': ul.id, 'type': 'storage', 'due': ul.arrival_end if ul.arrival_end is not None else float('inf')})
-
-        # Sort all tasks chronologically by their due date
-        all_tasks.sort(key=lambda x: x['due'])
-
-        # Create a mapping from ul_id to the object for easy access
-        ul_map = {ul.id: ul for ul in filtered_uls}
-
-        # Assign a single, unique, and monotonically increasing priority value across all tasks
-        for i, task in enumerate(all_tasks):
-            priority = i + 1
-            ul = ul_map.get(task['ul_id'])
-            if not ul: continue
-
-            if task['type'] == 'storage':
-                ul.set_storage_priority(priority)
-            elif task['type'] == 'retrieval':
-                ul.set_retrieval_priority(priority)
-
-        # Set the initial general .priority attribute for the move generator
-        for ul in filtered_uls:
-            if ul.is_stored:
-                ul.priority = ul.retrieval_priority
-            else:
-                # Storage priority is the first task for a new UL
-                ul.priority = ul.storage_priority
-        
-        return filtered_uls
-
-    def _create_mock_unit_loads(self):
+    def _create_mock_unit_loads(self, all_unit_loads) -> List[UnitLoad]:
+        """Create mock unit loads for testing."""
         unit_load_objects = []
-        if isinstance(self.all_unit_loads, set):
-            sorted_ids = sorted(list(self.all_unit_loads))
+        if isinstance(all_unit_loads, set):
+            sorted_ids = sorted(list(all_unit_loads))
             for i, ul_id in enumerate(sorted_ids):
                 mock_ul = UnitLoad(
                     id=ul_id,
@@ -301,27 +934,24 @@ class AStarSolver:
                 unit_load_objects.append(mock_ul)
         return unit_load_objects
 
-    def solve(self):
+    def solve(self) -> Tuple[Optional[List], Optional[List], Dict]:
+        """Solve the warehouse optimization problem using A*."""
         self.start_time = time.time()
         
-        if self.verbose:
-            print(f"A* solver initialized with {len(self.unit_load_objects)} unit loads.")
-            # Priority details are already shown in _apply_task_queue_priorities, so just show initial state
-
         start_node = self._create_start_node()
         if not start_node:
-            return None, None, self.ul_priority_map
+            return None, None, self.unit_load_manager.ul_priority_map
 
         open_set = [start_node]
         closed_set = set()
         nodes_explored = 0
 
         while open_set:
-            if time.time() - self.start_time > self.time_limit:
-                if self.verbose:
+            if self._should_timeout():
+                if self.config.verbose:
                     print("A* search timed out.")
-                return None, None, self.ul_priority_map
-
+                return None, None, self.unit_load_manager.ul_priority_map
+            
             current_node = heapq.heappop(open_set)
             state_key = current_node.get_state_key()
 
@@ -331,33 +961,60 @@ class AStarSolver:
             nodes_explored += 1
 
             if self._is_goal_state(current_node):
-                solution_time = time.time() - self.start_time
-                path, nodes = self._reconstruct_path(current_node)
-                if self.verbose:
-                    print(f"Found solution with {len(path)} moves (cost: {current_node.g_cost:.2f}) "
-                          f"in {solution_time:.2f}s after exploring {nodes_explored} nodes.")
-                
-                solution_states = [node.to_dict(self.ul_priority_map) for node in nodes]
-                return path, solution_states, self.ul_priority_map
+                return self._handle_solution_found(current_node, nodes_explored)
 
             successors = self._generate_all_successors(current_node)
             for successor in successors:
                 if successor.get_state_key() not in closed_set:
                     heapq.heappush(open_set, successor)
 
-        if self.verbose:
+        return self._handle_no_solution_found(nodes_explored)
+    
+    def _should_timeout(self) -> bool:
+        """Check if search should timeout."""
+        return time.time() - self.start_time > self.config.time_limit
+    
+    def _handle_solution_found(self, current_node: AStarNode, nodes_explored: int) -> Tuple[List, List, Dict]:
+        """Handle when solution is found."""
+        solution_time = time.time() - self.start_time
+        path, nodes = self._reconstruct_path(current_node)
+        
+        if self.config.verbose:
+            print(f"Found solution with {len(path)} moves (cost: {current_node.g_cost:.2f}) "
+                  f"in {solution_time:.2f}s after exploring {nodes_explored} nodes.")
+        
+        solution_states = [node.to_dict() for node in nodes]
+        return path, solution_states, self.unit_load_manager.ul_priority_map
+    
+    def _handle_no_solution_found(self, nodes_explored: int) -> Tuple[None, None, Dict]:
+        """Handle when no solution is found."""
+        if self.config.verbose:
             solution_time = time.time() - self.start_time
             print(f"No solution found after {solution_time:.2f}s, exploring {nodes_explored} nodes.")
-        return None, None, self.ul_priority_map
+        return None, None, self.unit_load_manager.ul_priority_map
 
-    def _create_start_node(self):
+    def _reconstruct_path(self, node: AStarNode) -> Tuple[List[Dict], List[AStarNode]]:
+        """Reconstruct the solution path from goal node."""
+        path = []
+        nodes = []
+        current = node
+        
+        while current is not None:
+            if current.move:
+                path.append(current.move.to_dict())
+            nodes.append(current)
+            current = current.parent
+            
+        return path[::-1], nodes[::-1]
+
+    def _create_start_node(self) -> Optional[AStarNode]:
+        """Create the initial node for A* search."""
         already_stored_ids = self.initial_buffer_state.get_all_stored_unit_loads()
         
         unit_loads_at_sources = []
-        initial_unit_loads = []
-
-        for ul in self.unit_load_objects:
-            ul_copy = copy.deepcopy(ul)
+        
+        for ul in self.unit_load_manager.unit_loads:
+            ul_copy = ul.copy()
             if ul.id in already_stored_ids:
                 ul_copy.is_stored = True
                 ul_copy.is_at_sink = False
@@ -365,376 +1022,496 @@ class AStarSolver:
                 ul_copy.is_stored = False
                 ul_copy.is_at_sink = False
                 unit_loads_at_sources.append(ul_copy)
-            initial_unit_loads.append(ul_copy)
 
-        if self.verbose:
-            stored_ids = [ul.id for ul in initial_unit_loads if ul.is_stored]
+        if self.config.verbose:
+            stored_ids = [ul.id for ul in self.unit_load_manager.unit_loads if ul.is_stored]
             source_ids = [ul.id for ul in unit_loads_at_sources]
             print(f"Initial state: {len(stored_ids)} stored ULs ({stored_ids}), "
                   f"{len(source_ids)} ULs at source ({source_ids}).")
 
         start_node = AStarNode(
-            current_buffer_state=self.initial_buffer_state,
-            all_initial_unit_loads=initial_unit_loads,
-            unit_loads_at_sources=sorted(unit_loads_at_sources, key=lambda ul: ul.priority),
+            buffer_state=self.initial_buffer_state,
+            unit_load_manager=self.unit_load_manager,
+            unit_loads_at_sources=sorted(unit_loads_at_sources, key=lambda ul: ul.storage_priority),
             unit_loads_at_sinks=[],
             g_cost=0,
-            h_cost=0,
             current_time=0,
-            tabu_list=[]
+            tabu_list=[],
+            retrieval_sequence=[]
         )
-        start_node.h_cost = self._calculate_h_cost(start_node)
+        start_node.h_cost = self.heuristic_calc.calculate_h_cost(start_node)
         return start_node
 
-    def _is_goal_state(self, node: AStarNode):
+    def _is_goal_state(self, node: AStarNode) -> bool:
+        """Check if node represents goal state."""
         if len(node.unit_loads_at_sources) > 0:
             return False
         
-        # The goal is to have all unit loads that were initially present or arrived at the source, at the sink.
-        # This correctly handles cases where some ULs start at the source and some in the buffer.
-        return len(node.unit_loads_at_sinks) == len(self.unit_load_objects)
+        # Goal: all unit loads that were initially present should be at the sink
+        return len(node.unit_loads_at_sinks) == len(self.unit_load_manager.unit_loads)
 
-    def _calculate_h_cost(self, astar_node: AStarNode) -> float:
-        """
-        Priority-aware heuristic function:
-        - Base cost for remaining work
-        - Heavy penalty for priority order violations
-        """
-        h_cost = 0.0
-        
-        # Create maps for quick lookups
-        source_ids = {ul.id for ul in astar_node.unit_loads_at_sources}
-        sink_ids = {ul.id for ul in astar_node.unit_loads_at_sinks}
-        
-        # Base costs for remaining work
-        h_cost += len(source_ids) * 2  # Unit loads at source need storing + retrieving
-        
-        buffer_state = astar_node.current_buffer_state
-        stored_ul_ids = buffer_state.get_all_stored_unit_loads()
-        stored_not_retrieved_ids = stored_ul_ids - sink_ids
-        h_cost += len(stored_not_retrieved_ids) * 1  # Unit loads in buffer need retrieving
-        
-        # HEAVY PENALTY for priority order violations
-        # Check if any lower priority UL has been retrieved before a higher priority one
-        retrieved_priorities = []
-        remaining_priorities = []
-        
-        for ul in astar_node.unit_loads_at_sinks:
-            if hasattr(ul, 'retrieval_priority') and ul.retrieval_priority < 900:
-                retrieved_priorities.append(ul.retrieval_priority)
-        
-        for ul in astar_node.unit_loads_at_sources:
-            if hasattr(ul, 'retrieval_priority') and ul.retrieval_priority < 900:
-                remaining_priorities.append(ul.retrieval_priority)
-                
-        for ul_id in stored_not_retrieved_ids:
-            ul = next((ul for ul in self.unit_load_objects if ul.id == ul_id), None)
-            if ul and hasattr(ul, 'retrieval_priority') and ul.retrieval_priority < 900:
-                remaining_priorities.append(ul.retrieval_priority)
-        
-        # Check for violations: if any retrieved priority is higher than any remaining priority
-        if retrieved_priorities and remaining_priorities:
-            max_retrieved = max(retrieved_priorities)
-            min_remaining = min(remaining_priorities)
-            if max_retrieved > min_remaining:
-                # Severe penalty for processing lower priority before higher priority
-                h_cost += 1000 * (max_retrieved - min_remaining)
-        
-        return h_cost
-
-    def _generate_all_successors(self, current_node: AStarNode):
+    def _generate_all_successors(self, current_node: AStarNode) -> List[AStarNode]:
+        """Generate all possible successor nodes."""
         successors = []
-        successors.extend(self._generate_source_to_buffer_moves(current_node))
-        successors.extend(self._generate_buffer_to_sink_moves(current_node))
-        successors.extend(self._generate_reshuffling_moves(current_node))
+        successors.extend(self.move_generator.generate_source_to_buffer_moves(
+            current_node, self._create_successor))
+        successors.extend(self.move_generator.generate_buffer_to_sink_moves(
+            current_node, self._create_successor))
+        successors.extend(self.move_generator.generate_reshuffling_moves(
+            current_node, self._create_successor))
+        
+        # Apply aggressive pruning for all problem sizes  
+        max_successors = 20
+        if len(successors) > max_successors:
+            successors.sort(key=lambda x: x.f_cost)
+            successors = successors[:max_successors]
+            
         return successors
 
-    def _create_successor(self, current_node, move, move_cost, new_buffer_state,
-                          new_all_loads, new_sources, new_sinks):
-        
+    def _create_successor(self, current_node: AStarNode, move_info: MoveInfo, 
+                          new_buffer_state, new_sources: List[UnitLoad], 
+                          new_sinks: List[UnitLoad]) -> AStarNode:
+        """Create a successor node."""
+        move_cost = self.distance_calc.calculate_move_cost(move_info)
         new_time = current_node.current_time + move_cost
         
-        new_tabu_list = []
-        if move:
-            # Only make the DESTINATION of a store or reshuffle move tabu.
-            if move.get('type') in [MOVE_TYPE_STORE, MOVE_TYPE_RESHUFFLE]:
-                if 'to_pos' in move and move['to_pos'] not in [self.source_ap, self.sink_ap]:
-                    new_tabu_list.append(move['to_pos'])
-            elif move.get('type') == MOVE_TYPE_RETRIEVE:
-                # Add the 'from_pos' of a retrieval move to the tabu list.
-                if 'from_pos' in move and move['from_pos'] not in [self.source_ap, self.sink_ap]:
-                    new_tabu_list.append(move['from_pos'])
+        # Create new tabu list - carry over parent's tabu list and add new tabu positions
+        new_tabu_list = list(current_node.tabu_list)  # Copy parent's tabu list
+        TABU_TENURE = self.fleet_size - 1  
+
+        if move_info:
+            tabu_position = None
+            
+            # For STORE moves: do NOT tabu the destination lane.
+            # We want to allow filling the same lane sequentially if it's the best lane.
+            if move_info.move_type == MOVE_TYPE_STORE:
+                pass
+            
+            # For RETRIEVE/RESHUFFLE moves: tabu the source lane (from_pos) to avoid immediate reuse
+            elif move_info.move_type in [MOVE_TYPE_RETRIEVE, MOVE_TYPE_RESHUFFLE]:
+                from_pos = move_info.from_pos
+                if from_pos not in [self.distance_calc.source_ap, self.distance_calc.sink_ap]:
+                    tabu_position = from_pos
+            
+            # Add to tabu list if we have a position to tabu
+            if tabu_position is not None:
+                # Remove if already in list (to update position to front)
+                if tabu_position in new_tabu_list:
+                    new_tabu_list.remove(tabu_position)
+                # Insert at front (most recent)
+                new_tabu_list.insert(0, tabu_position)
+        
+        # Maintain tabu tenure - remove oldest if exceeded
+        while len(new_tabu_list) > TABU_TENURE:
+            new_tabu_list.pop()
+
+        # Update retrieval sequence
+        new_retrieval_sequence = list(current_node.retrieval_sequence)
+        if move_info and move_info.move_type == MOVE_TYPE_RETRIEVE:
+            new_retrieval_sequence.append(move_info.ul_id)
 
         successor = AStarNode(
-            current_buffer_state=new_buffer_state,
-            all_initial_unit_loads=new_all_loads,
+            buffer_state=new_buffer_state,
+            unit_load_manager=current_node.unit_load_manager,
             unit_loads_at_sources=new_sources,
             unit_loads_at_sinks=new_sinks,
             parent=current_node,
-            move=move,
+            move=move_info,
             g_cost=current_node.g_cost + move_cost,
-            h_cost=0,
             current_time=new_time,
-            tabu_list=new_tabu_list
+            tabu_list=new_tabu_list,
+            retrieval_sequence=new_retrieval_sequence
         )
-        successor.h_cost = self._calculate_h_cost(successor)
+        
+        # Use cached heuristic if available
+        state_key = successor.get_state_key()
+        if state_key in self.heuristic_cache:
+            successor.h_cost = self.heuristic_cache[state_key]
+        else:
+            successor.h_cost = self.heuristic_calc.calculate_h_cost(successor)
+            self.heuristic_cache[state_key] = successor.h_cost
+            
         return successor
 
-    def _generate_source_to_buffer_moves(self, current_node: AStarNode) -> list[AStarNode]:
+class MoveGenerator:
+    """Generates possible moves for the A* search."""
+    
+    def __init__(self, distance_calc: DistanceCalculator, config: AStarConfig, unit_load_manager):
+        self.distance_calc = distance_calc
+        self.config = config
+        self.unit_load_manager = unit_load_manager
+    
+    def generate_source_to_buffer_moves(self, current_node: AStarNode, 
+                                        create_successor_fn) -> List[AStarNode]:
+        """Generate moves from source to buffer."""
         successors = []
         if not current_node.unit_loads_at_sources:
             return []
 
-        # Find the minimum priority among all unit loads at the source.
-        min_priority = min(ul.priority for ul in current_node.unit_loads_at_sources)
-        
-        # Get all unit loads that have this minimum priority.
-        uls_to_store = [ul for ul in current_node.unit_loads_at_sources if ul.priority == min_priority]
+        # Find minimum priority unit loads
+        min_priority = min(ul.storage_priority for ul in current_node.unit_loads_at_sources)
+        uls_to_store = [ul for ul in current_node.unit_loads_at_sources 
+                       if ul.storage_priority == min_priority]
 
-        sim_buffer_state = copy.deepcopy(current_node.current_buffer_state)
-        empty_slots = sim_buffer_state.get_all_empty_slots()
-        
+        sim_buffer_state = current_node.buffer_state.copy()
+        # Use cached empty slots
+        empty_slots = current_node.empty_slots
         tabu_slots = current_node.tabu_list
-
-        # Generate moves for every unit load that shares the top priority.
+        
+        # Sort empty slots - this is ONLY for ordering which successors to try first
+        # The actual choice is made by f_cost comparison in A* search
+        sorted_slots = sorted(empty_slots, 
+                            key=lambda slot: (
+                                not slot.is_empty(),  # False (empty) sorts before True (has ULs)
+                                self.distance_calc.dist_matrix[slot.ap_id][self.distance_calc.sink_ap]
+                            ))
+        
         for ul_to_store in uls_to_store:
-            # CHRONOLOGICAL ORDER ENFORCEMENT: Check task queue chronological order
-            move_dict = {'type': MOVE_TYPE_STORE, 'ul_id': ul_to_store.id}
-            if self._violates_chronological_order(move_dict, current_node):
-                continue  # Skip this UL - it violates chronological order
-                
-            for slot in empty_slots:
-                if slot.ap_id in tabu_slots:
-                    continue
+            # Consider top slots by distance (limit to 10 for performance)
+            # H-cost will naturally prefer empty lanes via blocking and lane utilization penalties
+            slots_to_consider = sorted_slots[:min(10, len(sorted_slots))]
 
-                temp_buffer_state = copy.deepcopy(sim_buffer_state)
-                target_lane_in_copy = next((lane for lane in temp_buffer_state.virtual_lanes if lane.ap_id == slot.ap_id), None)
-                if not target_lane_in_copy: continue
-
-                target_tier = None
-                for i in range(len(target_lane_in_copy.stacks) - 1, -1, -1):
-                    if target_lane_in_copy.stacks[i] == 0:
-                        all_deeper_occupied = all(target_lane_in_copy.stacks[j] != 0 for j in range(i + 1, len(target_lane_in_copy.stacks)))
-                        if all_deeper_occupied:
-                            target_tier = len(target_lane_in_copy.stacks) - i
+            for slot in slots_to_consider:
+                # Check tabu, but allow if this is a move involving the SAME unit load
+                # (aspiration criterion: override tabu if it's for the same UL)
+                is_tabu = slot.ap_id in tabu_slots
+                if is_tabu:
+                    # Check if the last move to this position involved the same UL
+                    override_tabu = False
+                    temp_node = current_node
+                    while temp_node and temp_node.move:
+                        if temp_node.move.to_pos == slot.ap_id:
+                            # Found the move that made this position tabu
+                            if temp_node.move.ul_id == ul_to_store.id:
+                                override_tabu = True
                             break
+                        temp_node = temp_node.parent
+                    
+                    if not override_tabu:
+                        continue
 
-                temp_buffer_state.add_unit_load(ul_to_store, target_lane_in_copy)
-                new_sources = [ul for ul in current_node.unit_loads_at_sources if ul.id != ul_to_store.id]
-                new_all_loads = [ul for ul in current_node.all_initial_unit_loads if ul.id != ul_to_store.id]
-                ul_to_store_copy = copy.deepcopy(ul_to_store)
-                ul_to_store_copy.is_stored = True
-                ul_to_store_copy.priority = ul_to_store_copy.retrieval_priority
-                new_all_loads.append(ul_to_store_copy)
-                new_all_loads.sort(key=lambda ul: ul.id)
-
-                last_pos = current_node.vehicle_pos or self.vehicle_start_pos
-                travel_time = self.dist_matrix[last_pos][self.source_ap] + self.dist_matrix[self.source_ap][slot.ap_id]
-                move_cost = travel_time + self.handling_time
+                move_info, new_buffer_state, new_sources = self._create_store_move(
+                    ul_to_store, slot, sim_buffer_state, current_node.unit_loads_at_sources
+                )
                 
-                move_info = {'ul_id': ul_to_store.id, 'from_pos': self.source_ap, 'to_pos': slot.ap_id, 'to_tier': target_tier, 'type': MOVE_TYPE_STORE}
-                
-                successors.append(self._create_successor(current_node, move_info, move_cost, temp_buffer_state, new_all_loads, new_sources, current_node.unit_loads_at_sinks))
+                if move_info:
+                    successor = create_successor_fn(
+                        current_node, move_info, new_buffer_state, 
+                        new_sources, current_node.unit_loads_at_sinks
+                    )
+                    successors.append(successor)
             
         return successors
+    
+    def _create_store_move(self, ul_to_store: UnitLoad, slot, sim_buffer_state, 
+                          current_sources: List[UnitLoad]) -> Tuple[Optional[MoveInfo], any, List[UnitLoad]]:
+        """Create a store move."""
+        temp_buffer_state = sim_buffer_state.copy()
+        target_lane_in_copy = next(
+            (lane for lane in temp_buffer_state.virtual_lanes if lane.ap_id == slot.ap_id), 
+            None
+        )
+        if not target_lane_in_copy:
+            return None, None, []
 
-    def _generate_buffer_to_sink_moves(self, current_node: AStarNode):
+        target_tier = self._find_target_tier(target_lane_in_copy)
+        if target_tier is None:
+            return None, None, []
+
+        temp_buffer_state.add_unit_load(ul_to_store, target_lane_in_copy)
+        new_sources = [ul for ul in current_sources if ul.id != ul_to_store.id]
+        
+        # Update unit load state
+        ul_to_store_copy = ul_to_store.copy()
+        ul_to_store_copy.is_stored = True
+        ul_to_store_copy.priority = ul_to_store_copy.retrieval_priority
+
+        move_info = MoveInfo(
+            ul_id=ul_to_store.id,
+            move_type=MOVE_TYPE_STORE,
+            from_pos=self.distance_calc.source_ap,
+            to_pos=slot.ap_id,
+            to_tier=target_tier
+        )
+        
+        return move_info, temp_buffer_state, new_sources
+    
+    def _find_target_tier(self, lane) -> Optional[int]:
+        """Find the target tier for placement in LIFO order.
+        
+        TIER 1 IS THE BACK/DEEPEST POSITION!
+        
+        Tier numbering (USER'S REQUIREMENT):
+        - Tier 1 = BACK/deepest = highest index (e.g., index 1 in 2-slot lane)
+        - Tier 2 = FRONT/shallowest = lowest index (e.g., index 0 in 2-slot lane)
+        
+        For a 2-slot lane [index_0, index_1]:
+        - First UL goes to index 1 -> This is Tier 1 (BACK/DEEPEST)
+        - Second UL goes to index 0 -> This is Tier 2 (FRONT/SHALLOWEST)
+        
+        Formula: tier = len(stacks) - index
+        - index 1: tier = 2 - 1 = 1 (Tier 1, BACK)
+        - index 0: tier = 2 - 0 = 2 (Tier 2, FRONT)
+        """
+        # Find the highest empty index (where add_load will place the UL)
+        for i in range(len(lane.stacks) - 1, -1, -1):
+            if lane.stacks[i] == 0:
+                # Convert index to tier number: Tier 1 is at highest index
+                tier = len(lane.stacks) - i
+                return tier
+        
+        # Lane is full
+        return None
+    
+    def generate_buffer_to_sink_moves(self, current_node: AStarNode, 
+                                     create_successor_fn) -> List[AStarNode]:
+        """Generate moves from buffer to sink, prioritizing correctly when the buffer is full."""
         successors = []
-        accessible_uls = current_node.current_buffer_state.get_accessible_unit_loads()
-
+        accessible_uls = current_node.accessible_unit_loads
         if not accessible_uls:
             return []
-            
-        for ul_id, from_lane in accessible_uls.items():
-            ul_to_move = self._get_ul_by_id(ul_id, current_node.all_initial_unit_loads)
-            if not ul_to_move: continue
 
-            # PRIORITY ORDER ENFORCEMENT: Cut branches that violate priority order
-            # Check if there are higher priority ULs that should be retrieved first
-            if self._violates_priority_order(ul_to_move, current_node):
-                continue  # Skip this move - it violates priority order
-            
-            # CHRONOLOGICAL ORDER ENFORCEMENT: Check task queue chronological order
-            move_dict = {'type': MOVE_TYPE_RETRIEVE, 'ul_id': ul_id}
-            if self._violates_chronological_order(move_dict, current_node):
-                continue  # Skip this move - it violates chronological order
-            
-            sim_buffer_state = copy.deepcopy(current_node.current_buffer_state)
-            sim_buffer_state.retrieve_ul(ul_to_move.id)
-            new_sinks = sorted(current_node.unit_loads_at_sinks + [copy.deepcopy(ul_to_move)], key=lambda ul: ul.priority)
-            new_all_loads = [ul for ul in current_node.all_initial_unit_loads if ul.id != ul_to_move.id]
-            ul_to_move_copy = copy.deepcopy(ul_to_move)
-            ul_to_move_copy.is_at_sink = True
-            ul_to_move_copy.is_stored = False
-            new_all_loads.append(ul_to_move_copy)
+        storage_possible = len(current_node.empty_slots) > 0
+        uls_to_consider = []
 
-            last_pos = current_node.vehicle_pos or self.vehicle_start_pos
-            travel_time = self.dist_matrix[last_pos][from_lane.ap_id] + self.dist_matrix[from_lane.ap_id][self.sink_ap]
-            move_cost = travel_time + self.handling_time
+        if not storage_possible:
+            # Buffer is full. We MUST retrieve to make space.
+            # Find the single accessible UL with the highest priority (lowest priority value).
+            highest_priority_ul_data = None
+            min_priority_value = float('inf')
             
-            from_tier = None
-            for i, item in enumerate(from_lane.stacks):
-                if item == ul_to_move.id:
-                    from_tier = len(from_lane.stacks) - i
-                    break
+            for ul_id, from_lane in accessible_uls.items():
+                ul = current_node.unit_load_manager.get_ul_by_id(ul_id)
+                if ul and hasattr(ul, 'retrieval_priority') and ul.retrieval_priority < min_priority_value:
+                    min_priority_value = ul.retrieval_priority
+                    highest_priority_ul_data = (ul, from_lane)
             
-            move_info = {'ul_id': ul_to_move.id, 'from_pos': from_lane.ap_id, 'from_tier': from_tier, 'to_pos': self.sink_ap, 'type': MOVE_TYPE_RETRIEVE}
-            successors.append(self._create_successor(current_node, move_info, move_cost, sim_buffer_state, new_all_loads, current_node.unit_loads_at_sources, new_sinks))
+            # Only consider this single best option for retrieval.
+            if highest_priority_ul_data:
+                uls_to_consider.append(highest_priority_ul_data)
+        else:
+            # Buffer has space. Consider all accessible retrievals, but penalize out-of-order ones.
+            for ul_id, from_lane in accessible_uls.items():
+                ul_to_move = current_node.unit_load_manager.get_ul_by_id(ul_id)
+                if not ul_to_move:
+                    continue
+                
+                # Don't filter out-of-order retrievals - they will be penalized in move cost
+                uls_to_consider.append((ul_to_move, from_lane))
+
+        # Generate successor nodes for the unit loads that were selected for consideration.
+        for ul_to_move, from_lane in uls_to_consider:
+            move_info, new_buffer_state, new_sinks = self._create_retrieve_move(
+                ul_to_move, from_lane, current_node
+            )
+            
+            if move_info:
+                successor = create_successor_fn(
+                    current_node, move_info, new_buffer_state,
+                    current_node.unit_loads_at_sources, new_sinks
+                )
+                successors.append(successor)
             
         return successors
+    
+    def _create_retrieve_move(self, ul_to_move: UnitLoad, from_lane, 
+                             current_node: AStarNode) -> Tuple[Optional[MoveInfo], any, List[UnitLoad]]:
+        """Create a retrieve move."""
+        sim_buffer_state = current_node.buffer_state.copy()
+        sim_buffer_state.retrieve_ul(ul_to_move.id)
+        
+        new_sinks = sorted(
+            current_node.unit_loads_at_sinks + [ul_to_move.copy()], 
+            key=lambda ul: ul.retrieval_priority
+        )
 
-    def _violates_priority_order(self, ul_to_retrieve, current_node: AStarNode) -> bool:
+        # Update unit load state
+        ul_to_move_copy = ul_to_move.copy()
+        ul_to_move_copy.is_at_sink = True
+        ul_to_move_copy.is_stored = False
+
+        from_tier = self._find_from_tier(from_lane, ul_to_move.id)
+        
+        move_info = MoveInfo(
+            ul_id=ul_to_move.id,
+            move_type=MOVE_TYPE_RETRIEVE,
+            from_pos=from_lane.ap_id,
+            from_tier=from_tier,
+            to_pos=self.distance_calc.sink_ap
+        )
+        
+        return move_info, sim_buffer_state, new_sinks
+    
+    def _find_from_tier(self, lane, ul_id: int) -> Optional[int]:
+        """Find the tier from which unit load is retrieved."""
+        for i, item in enumerate(lane.stacks):
+            if item == ul_id:
+                return len(lane.stacks) - i
+        return None
+    
+    def _violates_priority_order(self, ul_to_retrieve: UnitLoad, 
+                                current_node: AStarNode) -> bool:
         """
-        Check if retrieving this unit load would violate the priority order.
-        Returns True if there are higher-priority ULs that should be retrieved first.
+        Check if retrieving this unit load would violate priority order.
+        
+        A retrieval violates priority order if there's ANY higher-priority task waiting:
+        1. Higher-priority storage task at source (lower storage_priority number), OR
+        2. Higher-priority retrieval task accessible in buffer (lower retrieval_priority number)
+        
+        All priorities are on the same scale (1, 2, 3, ...) where lower = higher priority.
         """
         if not ul_to_retrieve.retrieval_priority or ul_to_retrieve.retrieval_priority >= 900:
-            return False  # No priority assigned, allow retrieval
-        
-        # Get currently accessible unit loads
-        accessible_uls = current_node.current_buffer_state.get_accessible_unit_loads()
-        
-        # Check if there are accessible ULs with higher priority (lower priority number)
-        for accessible_ul_id in accessible_uls.keys():
-            accessible_ul = self._get_ul_by_id(accessible_ul_id, current_node.all_initial_unit_loads)
-            if (accessible_ul and 
-                accessible_ul.retrieval_priority is not None and 
-                accessible_ul.retrieval_priority < 900 and
-                accessible_ul.retrieval_priority < ul_to_retrieve.retrieval_priority):
-                # There's a higher priority UL that's accessible - this would violate order
-                if self.verbose:
-                    pass  # Remove debug output
+            return False
+
+        # Check unit loads at source - use STORAGE priority (their next pending task)
+        for ul in current_node.unit_loads_at_sources:
+            if ul.id == ul_to_retrieve.id:
+                continue
+            
+            # UL at source with higher storage priority (lower number) should be stored first
+            # Compare against the retrieval task priority we're trying to execute
+            if (hasattr(ul, 'storage_priority') and 
+                ul.storage_priority is not None and
+                ul.storage_priority < 900 and
+                ul.storage_priority < ul_to_retrieve.retrieval_priority):
+                # There's a storage task with higher priority than this retrieval task
                 return True
         
-        return False
-
-    def _violates_chronological_order(self, move, current_node: AStarNode):
-        """
-        Check if this move violates the chronological task order from task queue.
-        Returns True if there's an earlier task that should be completed first.
-        """
-        if not self.task_queue:
-            return False
-            
-        move_type = move.get('type')
-        ul_id = move.get('ul_id')
+        # Check ACCESSIBLE stored unit loads - use RETRIEVAL priority (their next pending task)
+        # Only check if there's a higher-priority retrieval waiting
+        accessible_ul_ids = set(current_node.accessible_unit_loads.keys())
         
-        # Find the task for this move
-        current_task = None
-        for task in self.task_queue:
-            if move_type == MOVE_TYPE_STORE and task.task_type == 'STORAGE':
-                # For storage, match real_ul_id for mock tasks
-                if hasattr(task, 'real_ul_id') and task.real_ul_id == ul_id:
-                    current_task = task
-                    break
-            elif move_type == MOVE_TYPE_RETRIEVE and task.task_type == 'RETRIEVAL':
-                # For retrieval, match task.id directly
-                if task.id == ul_id:
-                    current_task = task
-                    break
-        
-        if not current_task:
-            return False
-            
-        # Check if any earlier task (lower priority number) is still incomplete
-        for earlier_task in self.task_queue:
-            if earlier_task.priority >= current_task.priority:
-                continue  # Not earlier
+        for stored_ul_id in accessible_ul_ids:
+            if stored_ul_id == ul_to_retrieve.id:
+                continue
                 
-            # Check if this earlier task is still incomplete
-            if earlier_task.task_type == 'STORAGE':
-                # Storage task - check if UL is still at source
-                real_ul_id = getattr(earlier_task, 'real_ul_id', earlier_task.id)
-                ul_at_source = any(ul.id == real_ul_id for ul in current_node.unit_loads_at_sources)
-                if ul_at_source:
-                    return True
-                    
-            elif earlier_task.task_type == 'RETRIEVAL':
-                # Retrieval task - check if UL is not yet at sink
-                ul_at_sink = any(ul.id == earlier_task.id for ul in current_node.unit_loads_at_sinks)
-                if not ul_at_sink:
-                    return True
-        
+            stored_ul = current_node.unit_load_manager.get_ul_by_id(stored_ul_id)
+            if not stored_ul:
+                continue
+
+            if (stored_ul.retrieval_priority is not None and
+                stored_ul.retrieval_priority < 900 and
+                stored_ul.retrieval_priority < ul_to_retrieve.retrieval_priority):
+                # Found a retrieval task with higher priority than this retrieval task
+                return True
+                
         return False
 
-    def _generate_reshuffling_moves(self, current_node: AStarNode) -> list[AStarNode]:
+    
+    def generate_reshuffling_moves(self, current_node: AStarNode, 
+                                  create_successor_fn) -> List[AStarNode]:
+        """Generate reshuffling moves."""
         successors = []
-        sim_buffer_state = copy.deepcopy(current_node.current_buffer_state)
-        empty_lanes = sim_buffer_state.get_all_empty_lanes()
-        if not empty_lanes:
+        sim_buffer_state = current_node.buffer_state.copy()
+        
+        # Use cached blocking moves
+        blocking_moves = current_node.blocking_moves
+        
+        if not blocking_moves:
+            return []
+        
+        # Get both empty lanes AND empty slots
+        empty_lanes = current_node.empty_lanes
+        empty_slots = current_node.empty_slots
+        tabu_slots = current_node.tabu_list
+        
+        # Combine empty lanes and empty slots for reshuffle targets
+        # Empty lanes are preferred, but we also allow reshuffling to empty slots in partially filled lanes
+        reshuffle_targets = []
+        
+        # Add empty lanes first (preferred)
+        for lane in empty_lanes:
+            reshuffle_targets.append(('empty_lane', lane))
+        
+        # Add empty slots in partially filled lanes
+        for slot in empty_slots:
+            # Skip slots in empty lanes (already added above)
+            if slot not in [lane for lane in empty_lanes]:
+                # Only add if the lane has at least one empty slot
+                reshuffle_targets.append(('empty_slot', slot))
+        
+        if not reshuffle_targets:
             return []
 
-        blocking_moves = sim_buffer_state.get_all_blocking_moves(self.unit_load_objects)
-        tabu_slots = current_node.tabu_list
-
-        # Limit the number of reshuffling moves to consider from a single state
-        # to prevent state space explosion. We prioritize moves that unblock higher-priority ULs.
-        # Note: get_all_blocking_moves should ideally return moves sorted by the priority of the UL they unblock.
-        # Assuming it's not sorted, we'll just take the first few.
-        MAX_RESHUFFLE_BRANCHING = 3 
-        
-        for move in blocking_moves[:MAX_RESHUFFLE_BRANCHING]:
+        for move in blocking_moves[:self.config.max_reshuffle_branching]:
             ul_to_move_id = move['ul_id']
             from_lane_ap_id = move['from_lane'].ap_id
             
-            ul_to_move = self._get_ul_by_id(ul_to_move_id, current_node.all_initial_unit_loads)
-            if not ul_to_move: continue
+            ul_to_move = current_node.unit_load_manager.get_ul_by_id(ul_to_move_id)
+            if not ul_to_move:
+                continue
 
-            for empty_lane_template in empty_lanes:
-                if from_lane_ap_id == empty_lane_template.ap_id:
+            for target_type, target in reshuffle_targets:
+                target_ap_id = target.ap_id
+                
+                # Can't reshuffle within the same lane
+                if from_lane_ap_id == target_ap_id:
                     continue
                 
-                if empty_lane_template.ap_id in tabu_slots:
-                    continue
-
-                temp_buffer_state = copy.deepcopy(sim_buffer_state)
-                from_lane_in_copy = next((lane for lane in temp_buffer_state.virtual_lanes if lane.ap_id == from_lane_ap_id), None)
-                to_lane_in_copy = next((lane for lane in temp_buffer_state.virtual_lanes if lane.ap_id == empty_lane_template.ap_id), None)
-                if not from_lane_in_copy or not to_lane_in_copy: continue
-
-                from_tier = None
-                for i, item in enumerate(from_lane_in_copy.stacks):
-                    if item == ul_to_move.id:
-                        from_tier = len(from_lane_in_copy.stacks) - i
-                        break
-
-                to_tier = None
-                for i in range(len(to_lane_in_copy.stacks) - 1, -1, -1):
-                    if to_lane_in_copy.stacks[i] == 0:
-                        all_deeper_occupied = all(to_lane_in_copy.stacks[j] != 0 for j in range(i + 1, len(to_lane_in_copy.stacks)))
-                        if all_deeper_occupied:
-                            to_tier = len(to_lane_in_copy.stacks) - i
+                # Check tabu, but allow if this is a move involving the SAME unit load
+                # (aspiration criterion: override tabu if it's for the same UL)
+                is_tabu = target_ap_id in tabu_slots
+                if is_tabu:
+                    # Check if the last move to this position involved the same UL
+                    override_tabu = False
+                    temp_node = current_node
+                    while temp_node and temp_node.move:
+                        if temp_node.move.to_pos == target_ap_id:
+                            # Found the move that made this position tabu
+                            if temp_node.move.ul_id == ul_to_move_id:
+                                override_tabu = True
                             break
+                        temp_node = temp_node.parent
+                    
+                    if not override_tabu:
+                        continue
 
-                temp_buffer_state.move_unit_load(ul_to_move.id, from_lane_in_copy, to_lane_in_copy)
-                last_pos = current_node.vehicle_pos or self.vehicle_start_pos
-                travel_time = self.dist_matrix[last_pos][from_lane_in_copy.ap_id] + self.dist_matrix[from_lane_in_copy.ap_id][to_lane_in_copy.ap_id]
-                move_cost = travel_time + self.handling_time
+                move_info, new_buffer_state = self._create_reshuffle_move(
+                    ul_to_move, move, target, sim_buffer_state
+                )
                 
-                move_info = {'ul_id': ul_to_move.id, 'from_pos': from_lane_in_copy.ap_id, 'from_tier': from_tier, 'to_pos': to_lane_in_copy.ap_id, 'to_tier': to_tier, 'type': MOVE_TYPE_RESHUFFLE}
-                successors.append(self._create_successor(current_node, move_info, move_cost, temp_buffer_state, current_node.all_initial_unit_loads, current_node.unit_loads_at_sources, current_node.unit_loads_at_sinks))
+                if move_info:
+                    successor = create_successor_fn(
+                        current_node, move_info, new_buffer_state,
+                        current_node.unit_loads_at_sources, current_node.unit_loads_at_sinks
+                    )
+                    successors.append(successor)
 
         return successors
+    
+    def _create_reshuffle_move(self, ul_to_move: UnitLoad, move_data: Dict, 
+                              empty_lane_template, sim_buffer_state) -> Tuple[Optional[MoveInfo], any]:
+        """Create a reshuffle move."""
+        from_lane_ap_id = move_data['from_lane'].ap_id
+        
+        temp_buffer_state = sim_buffer_state.copy()
+        from_lane_in_copy = next(
+            (lane for lane in temp_buffer_state.virtual_lanes if lane.ap_id == from_lane_ap_id), 
+            None
+        )
+        to_lane_in_copy = next(
+            (lane for lane in temp_buffer_state.virtual_lanes if lane.ap_id == empty_lane_template.ap_id), 
+            None
+        )
+        
+        if not from_lane_in_copy or not to_lane_in_copy:
+            return None, None
 
-    def _reconstruct_path(self, node: AStarNode):
-        path = []
-        nodes = []
-        current = node
-        while current is not None:
-            if current.move:
-                path.append(copy.deepcopy(current.move))
-            nodes.append(current)
-            current = current.parent
-        return path[::-1], nodes[::-1]
+        from_tier = self._find_from_tier(from_lane_in_copy, ul_to_move.id)
+        to_tier = self._find_target_tier(to_lane_in_copy)
+        
+        if from_tier is None or to_tier is None:
+            return None, None
 
-    def _get_ul_priority(self, ul_id):
-        for ul in self.unit_load_objects:
-            if ul.id == ul_id:
-                return ul.priority
-        return float('inf')
-
-    def _get_ul_by_id(self, ul_id, unit_load_list):
-        for ul in unit_load_list:
-            if ul.id == ul_id:
-                return ul
-        return None
+        temp_buffer_state.move_unit_load(ul_to_move.id, from_lane_in_copy, to_lane_in_copy)
+        
+        move_info = MoveInfo(
+            ul_id=ul_to_move.id,
+            move_type=MOVE_TYPE_RESHUFFLE,
+            from_pos=from_lane_in_copy.ap_id,
+            from_tier=from_tier,
+            to_pos=to_lane_in_copy.ap_id,
+            to_tier=to_tier
+        )
+        
+        return move_info, temp_buffer_state
