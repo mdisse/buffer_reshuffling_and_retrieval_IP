@@ -76,6 +76,27 @@ class TestCaseBrr:
                 self.sc = gma.SolCheck(self.model.model)
             else:
                 raise ValueError("Model not properly initialized for constraint checking")
+        elif mode == "validate_gap":
+            # 1. Initialize the full model (same as solve mode)
+            # We need the full model to be able to set Start values and optimize
+            self.model = DynamicMultipleModel(self.instance, verbose=verbose)
+            
+            # 2. Inject your heuristic solution as a "Warm Start"
+            if solution and self.model and hasattr(self.model, 'model') and self.model.model is not None:
+                count = 0
+                for k, v in solution.items():
+                    var = self.model.model.getVarByName(k)
+                    if var is not None:
+                        # Use .Start instead of fixing bounds
+                        var.Start = v
+                        count += 1
+                
+                if self.verbose:
+                    print(f"Heuristic solution loaded as MIP Start ({count} variables set).")
+            else:
+                if self.verbose:
+                    print("Warning: No solution provided or model not initialized for validate_gap mode")
+
         elif mode == "solve":
             self.model.solve()
             self.print_inital_state()
@@ -278,7 +299,7 @@ class TestCaseBrr:
         
     def check_solution(self):
         self.sc.test_sol(self.sol)
-        # For debugging infeasible solutions, uncomment the following lines to get IIS details
+        # # For debugging infeasible solutions, uncomment the following lines to get IIS details
         # print("Computing Irreducible Inconsistent Subsystem (IIS)...")
         # self.model.model.computeIIS()
         # self.model.model.write("model.lp")
@@ -804,6 +825,38 @@ class TestCaseBrr:
             self.mip_gap = float('inf')
         
         return self.mip_gap
+
+    def calculate_gurobi_gap(self):
+        """
+        Runs Gurobi to validate the MIP Start and calculate the gap 
+        against the LP relaxation (Lower Bound).
+        """
+        if self.model and hasattr(self.model, 'model') and self.model.model:
+            # Set a short time limit (e.g., 30s) or NodeLimit
+            # We just need the Root Relaxation for the Lower Bound
+            self.model.model.Params.TimeLimit = 30 
+            self.model.model.Params.MIPFocus = 1  # Focus on finding feasible solutions (validates your start)
+            
+            print("Running Gurobi to establish Lower Bound...")
+            self.model.model.optimize()
+            
+            if self.model.model.SolCount > 0:
+                # Retrieve the gap directly from Gurobi
+                real_gap = self.model.model.MIPGap
+                obj_val = self.model.model.ObjVal
+                best_bound = self.model.model.ObjBound
+                
+                print(f"Gurobi Accepted Solution: {obj_val}")
+                print(f"Gurobi Lower Bound:     {best_bound}")
+                print(f"True MIP Gap:           {real_gap * 100:.2f}%")
+                
+                # Store in self.mip_gap as percentage for consistency with compare_with_gurobi
+                self.mip_gap = real_gap * 100
+                return real_gap
+            else:
+                print("Gurobi rejected the heuristic solution (Infeasible).")
+                return None
+        return None
     
     def save_heuristic_results(self, instance_file_path: str, fleet_size_override=None):
         """Save heuristic results to a file matching the Gurobi format."""

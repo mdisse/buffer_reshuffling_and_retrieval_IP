@@ -109,13 +109,16 @@ def save_heuristic_results(filename: str, test_case):
         }
     
     mip_gap_value = 0.0
-    if is_feasible and validation_report.get('_validation_mipgap') is not None:
-        mip_gap_value = validation_report['_validation_mipgap']
-    elif hasattr(test_case, 'mip_gap') and test_case.mip_gap is not None:
+    
+    # Prioritize the explicitly calculated MIP gap from the test case (from calculate_gurobi_gap or compare_with_gurobi)
+    if hasattr(test_case, 'mip_gap') and test_case.mip_gap is not None:
         if test_case.mip_gap == float('inf'):
             mip_gap_value = -1.0
         else:
             mip_gap_value = test_case.mip_gap / 100.0
+    # Fallback to validation gap (though usually 0 for fixed solutions in check mode)
+    elif is_feasible and validation_report.get('_validation_mipgap') is not None:
+        mip_gap_value = validation_report['_validation_mipgap']
 
     data['results'] = {
         'objective_value': corrected_objective,
