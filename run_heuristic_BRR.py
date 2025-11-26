@@ -109,11 +109,11 @@ def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=Non
         gurobi_result = load_gurobi_result(auto_result_path) if auto_result_path else None
     
     # Calculate MIP gap BEFORE saving so it can be stored in the file
-    if gurobi_result and gurobi_result.get('feasible'):
-        gurobi_mipgap = gurobi_result.get('gurobi_mipgap', None)
-        test_case.compare_with_gurobi(gurobi_result['objective'], gurobi_mipgap)
-        if verbose:
-            print(f"  Calculated MIP gap before saving: {test_case.mip_gap:.2f}%")
+    # if gurobi_result and gurobi_result.get('feasible'):
+    #     gurobi_mipgap = gurobi_result.get('gurobi_mipgap', None)
+    #     test_case.compare_with_gurobi(gurobi_result['objective'], gurobi_mipgap)
+    #     if verbose:
+    #         print(f"  Calculated MIP gap before saving: {test_case.mip_gap:.2f}%")
 
     # If validate_gap is requested (default True), run Gurobi to calculate the true MIP gap against lower bound
     # This will overwrite the comparison gap if it was calculated above, which is what we want
@@ -162,6 +162,10 @@ def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=Non
 
     # Read validation results from the saved file
     validation_results = get_validation_results_from_file(instance_file_path, fleet_size)
+    if verbose:
+        print(f"DEBUG: validation_results type: {type(validation_results)}")
+        if validation_results:
+            print(f"DEBUG: is_feasible: {validation_results.get('is_feasible')}")
     
     # Now update result dict with comparison data for output
     if gurobi_result and gurobi_result.get('feasible'):
@@ -173,8 +177,10 @@ def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=Non
             validation_gap = validation_results.get('validation_mipgap', None)
             if verbose:
                 print(f"  Using validation results for comparison: obj={validation_obj}, gap={validation_gap}")
-            # Re-compare with validation objective for display purposes
-            mip_gap = test_case.compare_with_gurobi(validation_obj, validation_gap)
+            
+            # Use validation gap directly
+            mip_gap = validation_gap * 100 if validation_gap is not None else 0.0
+            
             result.update({
                 'gurobi_obj': validation_obj,
                 'gurobi_time': gurobi_result['runtime'],
@@ -184,9 +190,31 @@ def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=Non
                 'has_comparison': True,
                 'used_validation': True
             })
+        elif validation_results and not validation_results.get('is_feasible', True):
+            # If validation failed, set MIP gap to NaN
+            if verbose:
+                print("  Validation failed (infeasible), setting MIP gap to NaN")
+            
+            mip_gap = float('nan')
+            
+            result.update({
+                'gurobi_obj': gurobi_result['objective'],
+                'gurobi_time': gurobi_result['runtime'],
+                'gurobi_mipgap': gurobi_result.get('gurobi_mipgap', 'N/A'),
+                'mip_gap': mip_gap,
+                'speedup': gurobi_result['runtime'] / test_case.heuristic_runtime if test_case.heuristic_runtime > 0 else 0,
+                'has_comparison': True,
+                'used_validation': True
+            })
         else:
-            # Use stored Gurobi result - mip_gap already calculated above
-            mip_gap = test_case.mip_gap if hasattr(test_case, 'mip_gap') else 0.0
+            # Use stored Gurobi result
+            heuristic_obj = test_case.heuristic_objective
+            gurobi_obj = gurobi_result['objective']
+            if gurobi_obj > 0:
+                 mip_gap = ((heuristic_obj - gurobi_obj) / gurobi_obj) * 100
+            else:
+                 mip_gap = float('inf')
+
             speedup = gurobi_result['runtime'] / test_case.heuristic_runtime if test_case.heuristic_runtime > 0 else 0
             
             result.update({
@@ -624,8 +652,7 @@ def get_validation_results_from_file(instance_file_path, fleet_size_override=Non
                 data = json.load(f)
                 return data.get('results', {}).get('validation', None)
     except Exception as e:
-        if os.getenv('DEBUG'):
-            print(f"Warning: Could not read validation results: {e}")
+        pass
     
     return None
 
@@ -779,7 +806,7 @@ if __name__ == "__main__":
                 
                 result = solve_instance(instance, verbose, json_file, None, args.astar_time_limit, args.vrp_time_limit, enable_visualization, validate_gap=not args.no_validate_gap)
                 
-                # Check if we got a result dictionary (from solve_with_comparison) or test_case (legacy)
+                # Check if got a result dictionary (from solve_with_comparison) or test_case (legacy)
                 if isinstance(result, dict):
                     # New path: check validation feasible status
                     if result.get('heuristic_feasible', False) and result.get('validation_feasible', True):

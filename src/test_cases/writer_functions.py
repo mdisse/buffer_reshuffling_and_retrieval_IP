@@ -108,17 +108,12 @@ def save_heuristic_results(filename: str, test_case):
             "violations": [{"type": "no_solution", "description": "Heuristic to find a solution"}]
         }
     
-    mip_gap_value = 0.0
-    
-    # Prioritize the explicitly calculated MIP gap from the test case (from calculate_gurobi_gap or compare_with_gurobi)
-    if hasattr(test_case, 'mip_gap') and test_case.mip_gap is not None:
-        if test_case.mip_gap == float('inf'):
-            mip_gap_value = -1.0
-        else:
-            mip_gap_value = test_case.mip_gap / 100.0
-    # Fallback to validation gap (though usually 0 for fixed solutions in check mode)
-    elif is_feasible and validation_report.get('_validation_mipgap') is not None:
-        mip_gap_value = validation_report['_validation_mipgap']
+    if is_feasible:
+        mip_gap_value = validation_report.get('_validation_mipgap', float('nan'))
+        if mip_gap_value is None:
+            mip_gap_value = float('nan')
+    else:
+        mip_gap_value = float('nan')
 
     data['results'] = {
         'objective_value': corrected_objective,
@@ -223,7 +218,17 @@ def generate_heuristic_result_path(instance_file_path: str, fleet_size_override=
     if filename.endswith('.json'):
         filename = filename[:-5] + '_heuristic.json'
     
-    result_path = f"{directory}/fleet_size_{fleet_size}/{filename}"
+    # Check if fleet_size directory is already in the path
+    fleet_dir = f"fleet_size_{fleet_size}"
+    if result_path.endswith(f"/{fleet_dir}/{filename}") or directory.endswith(f"/{fleet_dir}"):
+        result_path = f"{directory}/{filename}"
+    else:
+        # Only append if not already present (though usually it is present in the input path)
+        # If the input path didn't have it, we might want to add it, but for consistency with 
+        # generate_heuristic_filename, we should probably just use the directory as is 
+        # if we assume the input path structure is correct.
+        # However, to be safe and match the save function exactly:
+        result_path = f"{directory}/{filename}"
     
     return result_path
 

@@ -789,43 +789,6 @@ class TestCaseBrr:
                 print(f"Warning: Could not calculate corrected objective: {e}")
             return None
     
-    def compare_with_gurobi(self, gurobi_objective: float, gurobi_mipgap: float = None):
-        """
-        Compare heuristic solution with Gurobi solution.
-        
-        Args:
-            gurobi_objective: Gurobi's objective value
-            gurobi_mipgap: Gurobi's MIP gap (0 if proven optimal, >0 if not proven optimal)
-        
-        Returns:
-            MIP gap as a percentage (0 if heuristic matches proven optimal Gurobi solution)
-        """
-        self.gurobi_objective = gurobi_objective
-        
-        if self.heuristic_objective is None:
-            self.calculate_heuristic_objective()
-        
-        if self.gurobi_objective > 0 and self.heuristic_objective < float('inf'):
-            # Check if objectives are effectively equal (within tolerance)
-            objectives_equal = abs(self.heuristic_objective - self.gurobi_objective) < 1e-6
-            
-            # If Gurobi proved optimality (gap ≈ 0) and heuristic matches it, report 0% gap
-            if gurobi_mipgap is not None and abs(gurobi_mipgap) < 1e-6:  # Gurobi gap is effectively 0
-                if objectives_equal or self.heuristic_objective < self.gurobi_objective:
-                    # Heuristic matches or beats proven optimal solution -> 0% gap
-                    self.mip_gap = 0.0
-                else:
-                    # Heuristic is worse than proven optimal -> calculate positive gap
-                    self.mip_gap = ((self.heuristic_objective - self.gurobi_objective) / self.gurobi_objective) * 100
-            else:
-                # Gurobi didn't prove optimality, or we don't know its gap
-                # Calculate gap normally (can be negative if heuristic beats Gurobi)
-                self.mip_gap = ((self.heuristic_objective - self.gurobi_objective) / self.gurobi_objective) * 100
-        else:
-            self.mip_gap = float('inf')
-        
-        return self.mip_gap
-
     def calculate_gurobi_gap(self):
         """
         Runs Gurobi to validate the MIP Start and calculate the gap 
@@ -834,8 +797,8 @@ class TestCaseBrr:
         if self.model and hasattr(self.model, 'model') and self.model.model:
             # Set a short time limit (e.g., 30s) or NodeLimit
             # We just need the Root Relaxation for the Lower Bound
-            self.model.model.Params.TimeLimit = 30 
-            self.model.model.Params.MIPFocus = 1  # Focus on finding feasible solutions (validates your start)
+            self.model.model.Params.TimeLimit = 600
+            self.model.model.Params.MIPFocus = 3  # Focus on finding feasible solutions (validates your start)
             
             print("Running Gurobi to establish Lower Bound...")
             self.model.model.optimize()
@@ -850,7 +813,7 @@ class TestCaseBrr:
                 print(f"Gurobi Lower Bound:     {best_bound}")
                 print(f"True MIP Gap:           {real_gap * 100:.2f}%")
                 
-                # Store in self.mip_gap as percentage for consistency with compare_with_gurobi
+                # Store in self.mip_gap as percentage
                 self.mip_gap = real_gap * 100
                 return real_gap
             else:
