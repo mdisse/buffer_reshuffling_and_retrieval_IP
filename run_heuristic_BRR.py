@@ -10,7 +10,7 @@ import numpy as np
 from src.instance.instance_loader import InstanceLoader
 from src.instance.instance import Instance
 from src.test_cases.test_case_brr import TestCaseBrr
-from src.util.map_tw_prio import create_task_queue 
+from src.heuristics.map_tw_prio import create_task_queue 
 from src.visualization.auto_visualize import auto_visualize 
 
 def find_solved_gurobi_instances(experiments_dir="experiments"):

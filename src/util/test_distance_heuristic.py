@@ -10,7 +10,7 @@ from src.instance.instance import Instance
 from src.examples_gen.unit_load_gen import UnitLoadGenerator
 from src.heuristics.astar import AStarSolver
 from src.heuristics.h_cost import h_cost
-from src.util.map_tw_prio import create_task_queue
+from src.heuristics.map_tw_prio import create_task_queue
 
 def test_distance_heuristic():
     """Test the A* solver with the new distance-based heuristic."""
