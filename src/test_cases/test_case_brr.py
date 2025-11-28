@@ -78,24 +78,13 @@ class TestCaseBrr:
                 raise ValueError("Model not properly initialized for constraint checking")
         elif mode == "validate_gap":
             # 1. Initialize the full model (same as solve mode)
-            # We need the full model to be able to set Start values and optimize
             self.model = DynamicMultipleModel(self.instance, verbose=verbose)
             
-            # 2. Inject your heuristic solution as a "Warm Start"
-            if solution and self.model and hasattr(self.model, 'model') and self.model.model is not None:
-                count = 0
-                for k, v in solution.items():
-                    var = self.model.model.getVarByName(k)
-                    if var is not None:
-                        # Use .Start instead of fixing bounds
-                        var.Start = v
-                        count += 1
-                
-                if self.verbose:
-                    print(f"Heuristic solution loaded as MIP Start ({count} variables set).")
-            else:
-                if self.verbose:
-                    print("Warning: No solution provided or model not initialized for validate_gap mode")
+            # 2. Store solution for later use in calculate_gurobi_gap
+            # We don't set Start values here anymore, we'll fix variables later
+            self.heuristic_solution = solution
+            if self.verbose:
+                print(f"Model initialized for gap validation. Solution stored ({len(solution) if solution else 0} variables).")
 
         elif mode == "solve":
             self.model.solve()
@@ -707,12 +696,19 @@ class TestCaseBrr:
         # NOTE: Validation status is printed separately in the main output section
         if self.mip_gap is not None:
             if self.mip_gap < float('inf'):
-                print(f"  Gurobi optimal: {self.gurobi_objective:.1f}")
+                if self.gurobi_objective is not None:
+                    print(f"  Gurobi optimal: {self.gurobi_objective:.1f}")
                 print(f"  Heuristic objective: {self.heuristic_objective:.1f}")
                 print(f"  MIP gap: {self.mip_gap:.2f}%")
                 # Don't print "optimal" here - validation status will be shown later
             else:
-                print("  ⚠ Could not compare with Gurobi solution")
+                print("  MIP gap: Not available (Validation Failed or Infeasible)")
+                if self.gurobi_objective is not None:
+                    print(f"  Gurobi optimal: {self.gurobi_objective:.1f}")
+        else:
+            print("  MIP gap: Not available (Validation Failed or Infeasible)")
+            if self.gurobi_objective is not None:
+                print(f"  Gurobi optimal: {self.gurobi_objective:.1f}")
         
         # Print detailed AMR plans
         for vehicle in self.amr_assignments['vehicles']:
@@ -791,31 +787,76 @@ class TestCaseBrr:
     
     def calculate_gurobi_gap(self):
         """
-        Runs Gurobi to validate the MIP Start and calculate the gap 
+        Runs Gurobi to validate the heuristic solution and calculate the gap 
         against the LP relaxation (Lower Bound).
+        
+        Strategy:
+        1. Run unrestricted model briefly to get Global Lower Bound.
+        2. Fix variables to heuristic decisions.
+        3. Solve fixed model to get Upper Bound (Heuristic Objective) and complete the solution.
+        4. Calculate Gap.
         """
         if self.model and hasattr(self.model, 'model') and self.model.model:
-            # Set a short time limit (e.g., 30s) or NodeLimit
-            # We just need the Root Relaxation for the Lower Bound
-            self.model.model.Params.TimeLimit = 600
-            self.model.model.Params.MIPFocus = 3  # Focus on finding feasible solutions (validates your start)
+            # --- Step 1: Get Global Lower Bound ---
+            print("Running Gurobi to establish Global Lower Bound (Root Relaxation)...")
             
-            print("Running Gurobi to establish Lower Bound...")
+            # Set parameters for LB search
+            self.model.model.Params.TimeLimit = 300  # Short time limit for LB
+            self.model.model.Params.MIPFocus = 1    # Focus on bound
+            
+            self.model.model.optimize()
+            
+            # Capture Global Lower Bound
+            if self.model.model.Status == 3: # Infeasible
+                print("Global Lower Bound check failed: Model is Infeasible.")
+                print("Computing IIS to diagnose...")
+                self.model.model.computeIIS()
+                for c in self.model.model.getConstrs():
+                    if c.IISConstr:
+                        print(f"  Constraint in IIS: {c.ConstrName}")
+                return None
+            
+            global_lb = self.model.model.ObjBound
+            print(f"Global Lower Bound established: {global_lb}")
+            
+            # --- Step 2: Fix Variables to Heuristic Solution ---
+            print("Fixing variables to heuristic decisions...")
+            if hasattr(self, 'heuristic_solution') and self.heuristic_solution:
+                count = 0
+                for k, v in self.heuristic_solution.items():
+                    var = self.model.model.getVarByName(k)
+                    if var is not None:
+                        var.LB = v
+                        var.UB = v
+                        count += 1
+                print(f"Fixed {count} variables.")
+            
+            # --- Step 3: Solve Fixed Model ---
+            print("Optimizing fixed model to validate feasibility and complete solution...")
+            self.model.model.reset() # Reset optimization status
+            self.model.model.Params.TimeLimit = 1800 # Allow time to complete the solution
+            self.model.model.Params.MIPFocus = 1
+            
             self.model.model.optimize()
             
             if self.model.model.SolCount > 0:
-                # Retrieve the gap directly from Gurobi
-                real_gap = self.model.model.MIPGap
-                obj_val = self.model.model.ObjVal
-                best_bound = self.model.model.ObjBound
+                # We have a feasible solution for the fixed variables
+                heuristic_obj = self.model.model.ObjVal
                 
-                print(f"Gurobi Accepted Solution: {obj_val}")
-                print(f"Gurobi Lower Bound:     {best_bound}")
-                print(f"True MIP Gap:           {real_gap * 100:.2f}%")
+                # Calculate True Gap
+                # Gap = |Obj - Bound| / |Obj|
+                if heuristic_obj > 0:
+                    true_gap = abs(heuristic_obj - global_lb) / heuristic_obj
+                else:
+                    true_gap = 0.0
+                
+                print(f"Heuristic Objective (Fixed Model): {heuristic_obj}")
+                print(f"Global Lower Bound:                {global_lb}")
+                print(f"True MIP Gap:                      {true_gap * 100:.2f}%")
                 
                 # Store in self.mip_gap as percentage
-                self.mip_gap = real_gap * 100
-                return real_gap
+                self.mip_gap = true_gap * 100
+                return true_gap
             else:
                 print("Gurobi rejected the heuristic solution (Infeasible).")
                 return None

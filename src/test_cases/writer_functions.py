@@ -108,7 +108,12 @@ def save_heuristic_results(filename: str, test_case):
             "violations": [{"type": "no_solution", "description": "Heuristic to find a solution"}]
         }
     
-    if is_feasible:
+    # Prioritize the explicitly calculated MIP gap from the test case if available
+    if hasattr(test_case, 'mip_gap') and test_case.mip_gap is not None:
+        # test_case.mip_gap is stored as a percentage (0-100), but we want to save it as a ratio (0-1)
+        # to be consistent with Gurobi's standard output format
+        mip_gap_value = test_case.mip_gap / 100.0
+    elif is_feasible:
         mip_gap_value = validation_report.get('_validation_mipgap', float('nan'))
         if mip_gap_value is None:
             mip_gap_value = float('nan')

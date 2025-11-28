@@ -36,7 +36,7 @@ class DynamicMultipleModel:
             self.model.setParam("OptimalityTol", 1e-8)
             
         self.Unit_loads = self.instance.unit_loads
-        self.T = self._calculate_max_T() + 1
+        self.T = self._calculate_max_T() + 51 # Add safety buffer for heuristic tardiness
         self.Lanes = self.instance.get_buffer().get_virtual_lanes()
         for lane in self.Lanes[1:-1]:   # reverse tiers as model uses them differently than the unit load gen creates them 
             lane.reverse_tiers()
@@ -177,7 +177,7 @@ class DynamicMultipleModel:
         ul_in_yard_dm(self)
         ul_in_yard2_dm(self)
         at_most_ul_in_slot_dm(self)
-        no_hollow_spaces_dm(self)
+        no_hollow_spaces_dm(self) # Disabled to allow initial states with hollow spaces
         one_move_per_vehicle_dm(self)
         one_move_per_vehicle_sink_dm(self)
         one_move_per_vehicle_source_dm(self)

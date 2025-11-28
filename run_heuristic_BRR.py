@@ -109,11 +109,16 @@ def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=Non
         gurobi_result = load_gurobi_result(auto_result_path) if auto_result_path else None
     
     # Calculate MIP gap BEFORE saving so it can be stored in the file
-    # if gurobi_result and gurobi_result.get('feasible'):
-    #     gurobi_mipgap = gurobi_result.get('gurobi_mipgap', None)
-    #     test_case.compare_with_gurobi(gurobi_result['objective'], gurobi_mipgap)
-    #     if verbose:
-    #         print(f"  Calculated MIP gap before saving: {test_case.mip_gap:.2f}%")
+    if gurobi_result and gurobi_result.get('feasible'):
+        gurobi_obj = gurobi_result['objective']
+        heuristic_obj = test_case.heuristic_objective
+        
+        if gurobi_obj > 0 and heuristic_obj is not None:
+             # Calculate gap as percentage
+             gap = ((heuristic_obj - gurobi_obj) / gurobi_obj) * 100
+             test_case.mip_gap = gap
+             if verbose:
+                 print(f"  Calculated comparison MIP gap before validation: {test_case.mip_gap:.2f}%")
 
     # If validate_gap is requested (default True), run Gurobi to calculate the true MIP gap against lower bound
     # This will overwrite the comparison gap if it was calculated above, which is what we want

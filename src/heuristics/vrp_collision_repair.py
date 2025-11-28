@@ -471,7 +471,11 @@ class VRPCollisionRepairer:
                         print(f"  Repair (P-Steal): Successfully stole retrieval task from V{event_B['vehicle_id']} to V{event_A['vehicle_id']}.")
                     return
                 
-                # Stealing failed, B must wait.
+                # NEW: Try to evict the finished vehicle to Sink
+                if self._evict_finished_vehicle(solution, event_A, event_B):
+                    return
+
+                # Stealing and Eviction failed, B must wait.
                 if self.verbose:
                     print(f"  Repair (P3: Fallback): V{event_A['vehicle_id']} is PARKED (blocks {event_A['start']}-{event_A['end']}) and has no more moves. "
                           f"Delaying intruder V{event_B['vehicle_id']}.")
@@ -1365,6 +1369,70 @@ class VRPCollisionRepairer:
         if self.verbose:
             print(f"    Removed empty and retrieval moves from V{event_B['vehicle_id']}.")
         
+        return True
+
+    def _evict_finished_vehicle(self, solution: Dict, event_A: Dict, event_B: Dict) -> bool:
+        """
+        Evicts a vehicle that has finished its schedule but is blocking a lane.
+        Moves it to the Sink.
+        """
+        vehicle_A = solution['vehicles'][event_A['v_idx']]
+        vehicle_A_moves = vehicle_A['moves']
+        
+        # Target is Sink
+        target_loc = "sink"
+        
+        # Current location
+        lane_A_obj = self._find_virtual_lane_by_ap_id(event_A['lane_id'])
+        sink_lane_obj = self._get_lane_obj_from_location("sink")
+        
+        if not lane_A_obj:
+            return False
+            
+        # Calculate move
+        start_time = event_A['start']
+        
+        # Get current tier
+        prev_move = vehicle_A_moves[event_A['move_idx']]
+        current_tier = prev_move.get('to_tier', 1)
+        
+        # Distance to sink
+        dist = self.instance.calculate_distance(lane_A_obj, current_tier, sink_lane_obj, 1)
+        travel_time = int(math.ceil(max(1, dist / self.instance.get_vehicle_speed())))
+        end_time = start_time + travel_time
+        
+        # Create move
+        evict_move = {
+            'move_type': 'empty', 'ul_id': 0,
+            'from_location': str(event_A['lane_id']),
+            'to_location': target_loc,
+            'from_tier': current_tier,
+            'to_tier': 1,
+            'start_time': start_time,
+            'end_time': end_time,
+            'travel_distance': dist,
+            'service_time': travel_time,
+            'move_type_internal': 'evict_finished'
+        }
+        
+        # Append to moves
+        vehicle_A_moves.append(evict_move)
+        
+        if self.verbose:
+            print(f"  Repair (Evict Finished): V{event_A['vehicle_id']} moving to Sink to clear lane L{event_A['lane_id']}. "
+                  f"Time: {start_time}-{end_time}.")
+        
+        # Check if we still need to delay B
+        # A blocks the lane until it fully leaves.
+        # We assume it blocks until end_time.
+        
+        if end_time > event_B['start']:
+            delay = end_time - event_B['start']
+            if self.verbose:
+                print(f"  Repair (Evict Finished): Intruder V{event_B['vehicle_id']} still collides (arrives {event_B['start']}). "
+                      f"Delaying by {delay}.")
+            self._delay_intruder_and_propagate(solution, event_B['v_idx'], event_B['move_idx'], delay)
+            
         return True
 
     def _recalculate_solution_metrics(self, solution: Dict) -> Dict:
