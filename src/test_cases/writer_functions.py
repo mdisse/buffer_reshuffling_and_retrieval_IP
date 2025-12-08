@@ -190,7 +190,8 @@ def save_heuristic_results(filename: str, test_case):
     for lane in test_case.instance.wh_initial.virtual_lanes:
         data['virtual_lanes'].append(lane.to_data_dict())
 
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    if os.path.dirname(filename):
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
     
     with open(filename, 'w') as f:
         json.dump(data, f, indent=4)
@@ -263,7 +264,10 @@ def generate_heuristic_filename(instance_file_path: str, fleet_size_override=Non
     if filename.endswith('.json'):
         filename = filename[:-5] + '_heuristic.json'
     
-    result_path = f"{directory}/{filename}"
+    if directory:
+        result_path = f"{directory}/{filename}"
+    else:
+        result_path = filename
     
     return result_path
 
