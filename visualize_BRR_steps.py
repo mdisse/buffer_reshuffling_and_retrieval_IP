@@ -30,6 +30,8 @@ parser.add_argument('--subplot-timesteps', type=str, default="", help="Comma-sep
 parser.add_argument('--max_urgency_window', type=int, help='Maximum window (in time steps) for unit load retrieval urgency coloring. ULs with retrieval_end within this window from current_time_step will be colored with red-orange-yellow gradient based on urgency. ULs beyond this window will be light grey. ULs due or past due will be dark red.')
 parser.add_argument('--overwrite', dest='overwrite', action='store_true', help='Overwrite existing visualization directory if it exists.')
 parser.set_defaults(overwrite=False)
+parser.add_argument('--no-legend', dest='no_legend', action='store_true', help='Do not display the legend in the plots.')
+parser.set_defaults(no_legend=False)
 args = parser.parse_args()
 source = args.source
 color_vls = args.color_vls
@@ -38,6 +40,7 @@ all_experiments = args.all
 file = args.file
 subplot_timesteps_arg = args.subplot_timesteps
 overwrite = args.overwrite
+no_legend = args.no_legend
 
 def get_ul_color(ul_id, current_time_step, ul_retrieval_times_map, max_urgency_window):
     """Calculates the color for a unit load based on its retrieval urgency.
@@ -178,29 +181,29 @@ def process_file(file):
         if color_vls: # Populate if color_vls is true
             for bay in data["bay_info"].values():
                 coordinates = []
-                for col in range(bay["length"]):
-                    for row in range(bay["width"]):
+                for col in range(bay["width"]):
+                    for row in range(bay["length"]):
                         coordinates.append((bay["x"] + col, bay["y"] + row))
-            for coordinate in coordinates:
-                x = coordinate[0]
-                y = coordinate[1]
-                for ap in data["access_points"]:
-                    if ap["direction"] == "north":
-                        ap_y = ap["global_y"] + 1
-                        ap_x = ap["global_x"]
-                    elif ap["direction"] == "south":
-                        ap_y = ap["global_y"] - 1
-                        ap_x = ap["global_x"]
-                    elif ap["direction"] == "east":
-                        ap_y = ap["global_y"]
-                        ap_x = ap["global_x"] - 1
-                    elif ap["direction"] == "west":
-                        ap_y = ap["global_y"]
-                        ap_x = ap["global_x"] + 1
-                    if ap_x == x and ap_y == y:
-                        virtual_lanes[(x, y)] = {}
-                        virtual_lanes[(x, y)]["ap_id"] = ap["ap_id"]
-                        virtual_lanes[(x, y)]["access_direction"] = ap["direction"]
+                for coordinate in coordinates:
+                    x = coordinate[0]
+                    y = coordinate[1]
+                    for ap in data["access_points"]:
+                        if ap["direction"] == "north":
+                            ap_y = ap["global_y"] + 1
+                            ap_x = ap["global_x"]
+                        elif ap["direction"] == "south":
+                            ap_y = ap["global_y"] - 1
+                            ap_x = ap["global_x"]
+                        elif ap["direction"] == "east":
+                            ap_y = ap["global_y"]
+                            ap_x = ap["global_x"] - 1
+                        elif ap["direction"] == "west":
+                            ap_y = ap["global_y"]
+                            ap_x = ap["global_x"] + 1
+                        if ap_x == x and ap_y == y:
+                            virtual_lanes[(x, y)] = {}
+                            virtual_lanes[(x, y)]["ap_id"] = ap["ap_id"]
+                            virtual_lanes[(x, y)]["access_direction"] = ap["direction"]
             additional_lanes = {}
             for vl in list(virtual_lanes.keys()): # Use list() to avoid runtime error for changing dict size
                 ap_id = virtual_lanes[vl]["ap_id"]
@@ -251,21 +254,13 @@ def process_file(file):
 
 
         # Bay borders
-        linewidth = 0.025
-        for bay, config in bays.items():
-            size = int(bay[:1])
-            pattern = r"row (\d+), column (\d+)"
-            match = re.search(pattern, bay)
-            if match:
-                row = int(match.group(1))
-                col = int(match.group(2))
-
-                # Draw top and bottom borders
-                plt.gca().add_patch(plt.Rectangle((col, row), size, linewidth, color='black'))  # Top
-                plt.gca().add_patch(plt.Rectangle((col, row + size - linewidth), size, linewidth, color='black'))  # Bottom
-                # Draw left and right borders
-                plt.gca().add_patch(plt.Rectangle((col, row), linewidth, size, color='black'))  # Left
-                plt.gca().add_patch(plt.Rectangle((col + size - linewidth, row), linewidth, size, color='black'))  # Right
+        linewidth = 2
+        for bay_name, config in data["bay_info"].items():
+            x = config["x"]
+            y = config["y"]
+            w = config["width"]
+            l = config["length"]
+            plt.gca().add_patch(plt.Rectangle((x, y), w, l, fill=False, edgecolor='black', linewidth=linewidth))
 
         # Plot access points
         access_points = data['access_points']
@@ -336,7 +331,8 @@ def process_file(file):
         temp_legend = legend.copy()
         if initial_state:
             del temp_legend["ap"]
-        plt.legend([plt.Rectangle((0,0),1,1, color=color) for color in colors.values()], temp_legend.values(), loc='center left')
+        if not no_legend:
+            plt.legend([plt.Rectangle((0,0),1,1, color=color) for color in colors.values()], temp_legend.values(), loc='center left')
         # legend_ul = plt.legend(handles, ul_labels, loc='lower left')
         # plt.gca().add_artist(legend_ul)
         plt.axis('scaled')
@@ -565,7 +561,8 @@ def process_file(file):
                                      ul_retrieval_times_map, max_urgency_window, # Pass the map and window
                                      decision_texts=frame_data["decision_texts"], 
                                      initial_state=is_true_initial_for_subplot, 
-                                     show_legend_in_subplot=show_legend_for_this_subplot)
+                                     show_legend_in_subplot=show_legend_for_this_subplot,
+                                     no_legend=no_legend)
             
             # Hide any unused subplots
             for j in range(num_plots, rows * cols):
@@ -604,7 +601,7 @@ def process_file(file):
 def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
                          data_func_arg, warehouse, colors, vl_colors, color_vls, source, debug, legend,
                          ul_retrieval_times_map_func_arg, max_urgency_window_func_arg,
-                         decision_texts=None, initial_state=False, show_legend_in_subplot=True):
+                         decision_texts=None, initial_state=False, show_legend_in_subplot=True, no_legend=False):
     """Plots the warehouse state onto a given Matplotlib Axes object."""
     bays = data_func_arg["initial_state"]
 
@@ -612,8 +609,8 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
     if color_vls:
         for bay in data_func_arg["bay_info"].values():
             coordinates = []
-            for col in range(bay["length"]):
-                for row_val in range(bay["width"]):
+            for col in range(bay["width"]):
+                for row_val in range(bay["length"]):
                     coordinates.append((bay["x"] + col, bay["y"] + row_val))
             for coordinate in coordinates:
                 x = coordinate[0]
@@ -679,18 +676,15 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
             ax.add_patch(plt.Rectangle((col_idx, row_idx), 1, 1, color=cell_color))
 
     # Bay borders
-    linewidth = 0.025
-    for bay, config in bays.items():
-        size = int(bay[:1])
-        pattern = r"row (\d+), column (\d+)"
-        match = re.search(pattern, bay)
-        if match:
-            row_val = int(match.group(1))
-            col_val = int(match.group(2))
-            ax.add_patch(plt.Rectangle((col_val, row_val), size, linewidth, color='black'))
-            ax.add_patch(plt.Rectangle((col_val, row_val + size - linewidth), size, linewidth, color='black'))
-            ax.add_patch(plt.Rectangle((col_val, row_val), linewidth, size, color='black'))
-            ax.add_patch(plt.Rectangle((col_val + size - linewidth, row_val), linewidth, size, color='black'))
+    linewidth = 0.05
+    for bay_name, config in data_func_arg["bay_info"].items():
+        x = config["x"]
+        y = config["y"]
+        w = config["width"]
+        l = config["length"]
+        
+        # Draw bay border
+        ax.add_patch(plt.Rectangle((x, y), w, l, fill=False, edgecolor='black', linewidth=0.025))
 
     # Plot access points
     access_points = data_func_arg['access_points']
@@ -754,7 +748,7 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
     ax.invert_yaxis()
     ax.grid(True, color='black', linewidth=.5)
 
-    if show_legend_in_subplot:
+    if show_legend_in_subplot and not no_legend:
         temp_legend = legend.copy()
         if initial_state:
             if "ap" in temp_legend: del temp_legend["ap"]
