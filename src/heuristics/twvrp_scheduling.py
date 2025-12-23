@@ -382,6 +382,13 @@ class TWVRPSchedulingSolver:
             start_var = model.NewIntVar(start_lower, start_upper, f'start_m{move.move_id}')
             end_var = model.NewIntVar(end_lower, end_upper, f'end_m{move.move_id}')
             
+            if self.verbose:
+                print(f"  Move {move.move_id} (UL{move.ul_id}): start=[{start_lower}, {start_upper}], end=[{end_lower}, {end_upper}], service={move.service_time}")
+                if end_lower - start_upper > move.service_time:
+                    print(f"    ⚠️  POTENTIAL INFEASIBILITY: Min End ({end_lower}) - Max Start ({start_upper}) = {end_lower - start_upper} > Service ({move.service_time})")
+                if end_upper - start_lower < move.service_time:
+                    print(f"    ⚠️  POTENTIAL INFEASIBILITY: Max End ({end_upper}) - Min Start ({start_lower}) = {end_upper - start_lower} < Service ({move.service_time})")
+
             # Create interval variable for the move
             interval_var = model.NewIntervalVar(
                 start_var, 

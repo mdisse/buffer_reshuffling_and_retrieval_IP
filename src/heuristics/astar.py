@@ -350,7 +350,9 @@ class AStarNode:
     def __lt__(self, other) -> bool:
         """Compare nodes for priority queue (lower f_cost has higher priority)."""
         if self.f_cost == other.f_cost:
-            return self.g_cost < other.g_cost
+            # Prefer deeper nodes (higher g_cost) to break ties
+            # This encourages the search to move towards the goal rather than exploring breadth
+            return self.g_cost > other.g_cost
         return self.f_cost < other.f_cost
 
 
@@ -1170,7 +1172,10 @@ class AStarSolver:
         
         # Create new tabu list - carry over parent's tabu list and add new tabu positions
         new_tabu_list = list(current_node.tabu_list)  # Copy parent's tabu list
-        TABU_TENURE = self.fleet_size - 1  
+        # TABU_TENURE = self.fleet_size - 1  
+        num_lanes = new_buffer_state.get_num_non_source_sink_lanes()
+        max_tenure = max(1, int(num_lanes / 2) - 1)
+        TABU_TENURE = min(self.fleet_size - 1, max_tenure)
 
         if move_info:
             tabu_position = None
@@ -1245,10 +1250,25 @@ class MoveGenerator:
         min_priority = min(ul.storage_priority for ul in current_node.unit_loads_at_sources)
         uls_to_store = [ul for ul in current_node.unit_loads_at_sources 
                        if ul.storage_priority == min_priority]
+        
+        # OPTIMIZATION: Break symmetry by enforcing an order on storage tasks.
+        # If we have multiple items to store with the same priority, pick the one with 
+        # the highest retrieval priority (lowest value) to store next.
+        # This avoids generating N! permutations of storage operations.
+        # We use ul.id as a tie-breaker to ensure deterministic behavior.
+        uls_to_store.sort(key=lambda ul: (ul.retrieval_priority, ul.id))
+        uls_to_store = uls_to_store[:1]
+
+        # if self.config.verbose:
+        #     print(f"DEBUG: Generating storage moves. Sources: {len(current_node.unit_loads_at_sources)}, Min Prio: {min_priority}, Candidates: {len(uls_to_store)}")
 
         sim_buffer_state = current_node.buffer_state.copy()
         # Use cached empty slots
         empty_slots = current_node.empty_slots
+        
+        # if self.config.verbose:
+        #     print(f"DEBUG: Empty slots found: {len(empty_slots)}")
+            
         tabu_slots = current_node.tabu_list
         
         # Sort empty slots - this is ONLY for ordering which successors to try first
@@ -1260,9 +1280,9 @@ class MoveGenerator:
                             ))
         
         for ul_to_store in uls_to_store:
-            # Consider top slots by distance (limit to 10 for performance)
+            # Consider top slots by distance (limit to 2 for performance)
             # H-cost will naturally prefer empty lanes via blocking and lane utilization penalties
-            slots_to_consider = sorted_slots[:min(10, len(sorted_slots))]
+            slots_to_consider = sorted_slots[:min(2, len(sorted_slots))]
 
             for slot in slots_to_consider:
                 # Check tabu, but allow if this is a move involving the SAME unit load
@@ -1293,6 +1313,8 @@ class MoveGenerator:
                         new_sources, current_node.unit_loads_at_sinks
                     )
                     successors.append(successor)
+                elif self.config.verbose:
+                     print(f"DEBUG: Failed to create store move for UL {ul_to_store.id} to slot {slot.ap_id}")
             
         return successors
     

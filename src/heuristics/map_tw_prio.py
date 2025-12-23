@@ -666,7 +666,8 @@ def create_task_queue(uls, buffer_state=None, current_time=0, verbose=False, dra
             all_tasks.append(retrieval_task)
         
         # Add a "mock" storage task if the UL is not yet stored
-        if not getattr(ul, 'stored', False) and ul.arrival_start is not None:
+        is_stored = getattr(ul, 'is_stored', False) or getattr(ul, 'stored', False)
+        if not is_stored and ul.arrival_start is not None:
             # For storage tasks, we use retrieval_start/end fields to store arrival times
             # but need to ensure retrieval_start >= 1 to satisfy UnitLoad validation
             storage_retrieval_start = max(1, ul.arrival_start)

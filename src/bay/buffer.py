@@ -480,6 +480,14 @@ class Buffer:
                     empty_lanes.append(lane)
         return empty_lanes
 
+    def get_num_non_source_sink_lanes(self) -> int:
+        """
+        Returns the number of virtual lanes that are not sources or sinks.
+        """
+        if self.virtual_lanes is None:
+            self.get_virtual_lanes()
+        return len([lane for lane in self.virtual_lanes if not lane.is_sink_or_source()])
+
     def _calculate_average_slot_distance(self) -> float:
         """
         Calculate the average distance between all storage slots in the buffer.
@@ -548,8 +556,8 @@ class Buffer:
             if len(lane_uls) < 2:
                 continue # No possible blocking in a lane with 0 or 1 UL
 
-            blocking_ul_ids_in_lane = set()
-
+            has_block = False
+            # Check for ANY block in the lane
             for i in range(len(lane_uls)):
                 for j in range(i + 1, len(lane_uls)):
                     ul_front_id = lane_uls[i]
@@ -561,12 +569,17 @@ class Buffer:
                     # Block if front UL has lower priority OR same priority
                     # Same priority is problematic due to tight time windows for sequential retrieval
                     if priority_front >= priority_back:
-                        # The unit load at the front (i) has lower or equal priority than the one
-                        # at the back (j), so it's a blocking item.
-                        blocking_ul_ids_in_lane.add(ul_front_id)
+                        has_block = True
+                        break
+                if has_block:
+                    break
             
-            for ul_id in blocking_ul_ids_in_lane:
-                blocking_moves.append({'ul_id': ul_id, 'from_lane': lane})
+            if has_block:
+                # If there is any block in the lane (even deep inside), the accessible item 
+                # (front of lane) must be moved to eventually resolve it.
+                # We only allow moving the accessible item to avoid creating hollow spaces.
+                accessible_ul_id = lane_uls[0]
+                blocking_moves.append({'ul_id': accessible_ul_id, 'from_lane': lane})
 
         return blocking_moves
 

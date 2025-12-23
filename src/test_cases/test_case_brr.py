@@ -862,7 +862,7 @@ class TestCaseBrr:
                 return None
         return None
     
-    def save_heuristic_results(self, instance_file_path: str, fleet_size_override=None):
+    def save_heuristic_results(self, instance_file_path: str, fleet_size_override=None, validate=True):
         """Save heuristic results to a file matching the Gurobi format."""
         from src.test_cases.writer_functions import save_heuristic_results, generate_heuristic_filename
         
@@ -870,7 +870,7 @@ class TestCaseBrr:
         output_filename = generate_heuristic_filename(instance_file_path, fleet_size_override)
         
         # Save the results
-        save_heuristic_results(output_filename, self)
+        save_heuristic_results(output_filename, self, validate=validate)
         
         # Always print where the file was saved
         print(f"Heuristic results saved to: {output_filename}")

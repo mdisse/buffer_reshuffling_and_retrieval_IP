@@ -123,6 +123,11 @@ class Instance():
                 self.unit_loads = []
             instanceLoader.generate_bays_priorities(self.wh_initial.bays, height=self.height, source=self.source)
         elif exampleGenerator is not None: 
+            # Clear the buffer state as the generator assumes empty start (or will populate it)
+            for bay in self.wh_initial.bays:
+                bay.height = self.height
+                bay.state = np.zeros((bay.length, bay.width, bay.height), dtype=int)
+
             self.unit_loads = exampleGenerator.generate_bays_priorities(self.wh_initial.bays, height=self.height, source=self.source)
         self.fill_level = self.wh_initial.estimate_fill_level()
 

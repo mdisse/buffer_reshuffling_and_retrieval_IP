@@ -52,7 +52,7 @@ def save_resultsBrr(filename: str, test_case):
     f.close()
 
 
-def save_heuristic_results(filename: str, test_case):
+def save_heuristic_results(filename: str, test_case, validate=True):
     """
     Saves the results of the heuristic experiment as a json file.
     """
@@ -88,7 +88,7 @@ def save_heuristic_results(filename: str, test_case):
     validation_report = {}
     is_feasible = False
     
-    if translated_decisions:
+    if validate and translated_decisions:
         try:
             is_feasible, validation_status, validation_report = validate_heuristic_solution_detailed(
                 test_case.instance, test_case, verbose=test_case.verbose
@@ -100,6 +100,13 @@ def save_heuristic_results(filename: str, test_case):
                 "message": f"Validation error: {str(e)}",
                 "violations": [{"type": "validation_error", "description": str(e)}]
             }
+    elif not validate:
+        validation_status = -1
+        is_feasible = False
+        validation_report = {
+            "message": "Validation skipped",
+            "violations": []
+        }
     else:
         validation_status = -1
         is_feasible = False
