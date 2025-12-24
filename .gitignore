@@ -170,7 +170,7 @@ cython_debug/
 
 *.png
 
-experiments/*
+experiments*/*
 !experiments/results/
 
 
