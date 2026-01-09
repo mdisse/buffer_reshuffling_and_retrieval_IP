@@ -1282,7 +1282,7 @@ class MoveGenerator:
         for ul_to_store in uls_to_store:
             # Consider top slots by distance (limit to 2 for performance)
             # H-cost will naturally prefer empty lanes via blocking and lane utilization penalties
-            slots_to_consider = sorted_slots[:min(2, len(sorted_slots))]
+            slots_to_consider = sorted_slots[:min(8, len(sorted_slots))]
 
             for slot in slots_to_consider:
                 # Check tabu, but allow if this is a move involving the SAME unit load

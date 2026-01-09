@@ -132,19 +132,24 @@ def process_file(file):
     init_dict = {}
     # Populate init_dict once, mapping (global_y, global_x) to ul_id
     for bay_key, bay_config in bays.items():
-        size = int(bay_key[:1])
+        # Determine bay dimensions from the data structure itself
+        # bay_config is [rows][cols][stack_height]
+        bay_rows = len(bay_config)
+        bay_cols = len(bay_config[0]) if bay_rows > 0 else 0
+
         pattern = r"row (\d+), column (\d+)"
         match = re.search(pattern, bay_key)
         if match:
             bay_layout_row = int(match.group(1)) # y-coordinate in layout
             bay_layout_col = int(match.group(2)) # x-coordinate in layout
-            for i_local_row in range(size):
-                for j_local_col in range(size):
+            for i_local_row in range(bay_rows):
+                for j_local_col in range(bay_cols):
                     global_y = bay_layout_row + i_local_row
                     global_x = bay_layout_col + j_local_col
                     # bay_config is [row][col][ul_id_in_list]
-                    ul_id_val = bay_config[i_local_row][j_local_col][0]
-                    init_dict[(global_y, global_x)] = ul_id_val
+                    if len(bay_config[i_local_row][j_local_col]) > 0:
+                        ul_id_val = bay_config[i_local_row][j_local_col][0]
+                        init_dict[(global_y, global_x)] = ul_id_val
 
     def ap_id_to_coords(ap_id, slot):
         """Converts an access point ID and tier/slot to its (x, y) coordinates.

@@ -73,11 +73,12 @@ def create_paths(instance):
 
 def generate_instances():
     files = [
+        '8x3',
         # 'Size_3x3_Layout_1x1_sink_source',
         # 'Size_4x4_Layout_1x1_sink_source',
-        'Size_5x5_Layout_1x1_sink_source',
-        'Size_6x6_Layout_1x1_sink_source',
-        'Size_7x7_Layout_1x1_sink_source',
+        # 'Size_5x5_Layout_1x1_sink_source',
+        # 'Size_6x6_Layout_1x1_sink_source',
+        # 'Size_7x7_Layout_1x1_sink_source',
         # 'Size_8x8_Layout_1x1_sink_source',
         # 'Size_3x3_Layout_2x2_sink_source',
         # 'Size_3x3_Layout_3x3_sink_source',
@@ -88,13 +89,14 @@ def generate_instances():
         # 'Size_3x3_Layout_1x1_sink',
     ]
     ad = [
-        {"north" : True, "east" : True, "south" : True, "west" : True},
-        {"north" : False, "east" : False, "south" : True, "west" : False},
-        {"north" : False, "east" : True, "south" : True, "west" : False}, 
-        {"north" : True, "east" : False, "south" : True, "west" : False}, 
+        # {"north" : True, "east" : True, "south" : True, "west" : True},
+        # {"north" : False, "east" : False, "south" : True, "west" : False},
+        # {"north" : False, "east" : True, "south" : True, "west" : False}, 
+        # {"north" : True, "east" : False, "south" : True, "west" : False}, 
+        {"north" : False, "east" : False, "south" : True, "west" : False}, 
     ]
     # seeds = [i for i in range(10)]
-    seeds = [0]
+    seeds = [1, 2, 3]
     fill_levels = [i/10 for i in range(7, 10)]
     # fill_levels = [0.1]
     # time_window_lengths = [i for i in range(30, 61, 10)]

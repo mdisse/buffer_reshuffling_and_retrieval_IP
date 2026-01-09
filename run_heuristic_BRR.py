@@ -739,7 +739,7 @@ if __name__ == "__main__":
     parser.add_argument("--experiments-dir", type=str, default="experiments", help="Path to experiments directory (default: experiments)")
     parser.add_argument("--verbose", action='store_true', help="Enable verbose output")
     parser.add_argument("--gurobi-result", type=str, help="Path to Gurobi result JSON file for comparison")
-    parser.add_argument("--astar-time-limit", type=float, default=600.0, help="Time limit in seconds for A* search (default: 300s)")
+    parser.add_argument("--astar-time-limit", type=float, default=300.0, help="Time limit in seconds for A* search (default: 300s)")
     parser.add_argument("--vrp-time-limit", type=float, default=300.0, help="Time limit in seconds for VRP solving (default: 300s)")
     parser.add_argument("--vrp-solver", type=str, default='scheduling', choices=['ortools', 'scheduling'], 
                         help="VRP solver to use: 'ortools' for routing-based, 'scheduling' for CP-SAT (default: ortools)")
