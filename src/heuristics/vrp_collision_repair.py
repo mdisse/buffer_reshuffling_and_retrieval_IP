@@ -59,7 +59,7 @@ class VRPCollisionRepairer:
         """
         repaired_solution = copy.deepcopy(naive_solution)
         loops = 0
-        max_loops = 2000  # Safety break
+        max_loops = 50  # Safety break
 
         if self.verbose:
             print(f"  Repair logic starting...")
