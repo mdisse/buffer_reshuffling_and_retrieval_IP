@@ -290,7 +290,8 @@ def process_file(file):
                      path_effects=[pe.withStroke(linewidth=1, foreground='white')])
 
         filename = "initial_state.png" if initial_state else f"move_{move_step:03d}.png"
-        plt.savefig(os.path.join(output_dir, filename), dpi=300, bbox_inches='tight')
+        # Removing bbox_inches='tight' to ensure consistent image dimensions for GIF creation
+        plt.savefig(os.path.join(output_dir, filename), dpi=300)
         plt.close()
 
     base_name = os.path.basename(file).split('.')[0]

@@ -44,7 +44,16 @@ class VirtualLane:
                         all_deeper_occupied = False
                         break
                 
-                if all_deeper_occupied:
+                # Check if all shallower tiers (lower indices closer to AP) are empty
+                # This ensures the robot can reach the target slot without 'jumping over' items.
+                # Without this check, the A* generates illegal 'teleport' moves, exploding the search space.
+                all_shallower_empty = True
+                for k in range(0, i):
+                    if self.stacks[k] != 0:
+                        all_shallower_empty = False
+                        break
+                
+                if all_deeper_occupied and all_shallower_empty:
                     new_lane = VirtualLane()
                     new_lane.ap_id = self.ap_id
                     new_lane.is_source = self.is_source

@@ -185,10 +185,12 @@ class AStarNode:
         self.move = move
         self.g_cost = g_cost
         self.current_time = current_time
-        self.weight = 1
+        self.weight = 2
         self.tabu_list = tabu_list if tabu_list is not None else []
         self.retrieval_sequence = retrieval_sequence if retrieval_sequence is not None else []
         self._h_cost: Optional[float] = None
+        self._h_cost_base: Optional[float] = None
+        self.is_fully_evaluated = False
         
         # Performance caching - computed lazily
         self._stored_unit_loads: Optional[Set] = None
@@ -212,7 +214,7 @@ class AStarNode:
     def h_cost(self) -> float:
         """Get heuristic cost (lazy evaluation)."""
         if self._h_cost is None:
-            raise ValueError("Heuristic cost not calculated")
+             raise ValueError("Heuristic cost not calculated")
         return self._h_cost
     
     @h_cost.setter
@@ -223,7 +225,12 @@ class AStarNode:
     @property
     def f_cost(self) -> float:
         """Get total cost (g + h)."""
-        return self.g_cost + self.weight * self.h_cost
+        if self._h_cost is not None:
+             return self.g_cost + self.weight * self.h_cost
+        elif self._h_cost_base is not None:
+             # If only base heuristic is available, use it (will be updated later)
+             return self.g_cost + self.weight * self._h_cost_base
+        return float('inf')
 
     @property
     def stored_unit_loads(self) -> Set[int]:
@@ -784,32 +791,40 @@ class HeuristicCalculator:
         
         return total_penalty
     
-    def calculate_h_cost(self, node: AStarNode) -> float:
+    def calculate_base_h_cost(self, node: AStarNode) -> float:
         """
-        Calculate heuristic cost for the node.
-        
-        The h_cost estimates the remaining work required to complete all tasks:
-        1. Storage cost: Moving ULs from source to buffer
-        2. Retrieval cost: Moving stored ULs from buffer to sink
-        3. Blocking cost: Reshuffling ULs that block required retrievals
-           (includes same-priority blocking detected by buffer.get_all_blocking_moves())
-        4. Priority violation penalty: Penalizing out-of-order retrievals by counting
-           inversions in the actual vs ideal retrieval sequence
-        5. Priority blocking penalty: Penalizing when lower-priority ULs block higher-priority ones
+        Calculate the 'cheap' base components of the heuristic.
+        Includes only storage and retrieval distance estimations.
         """
-        # Create sets for quick lookups
         source_ids = {ul.id for ul in node.unit_loads_at_sources}
         sink_ids = {ul.id for ul in node.unit_loads_at_sinks}
         
-        # Calculate cost components
         storage_cost = self._calculate_storage_cost(source_ids, node.empty_slots)
         retrieval_cost = self._calculate_retrieval_cost(node.stored_unit_loads, sink_ids, node)
+        
+        return storage_cost + retrieval_cost
+
+    def calculate_penalty_h_cost(self, node: AStarNode) -> float:
+        """
+        Calculate the 'expensive' penalty components of the heuristic.
+        Includes blocking cost and priority violations.
+        """
+        source_ids = {ul.id for ul in node.unit_loads_at_sources}
+        sink_ids = {ul.id for ul in node.unit_loads_at_sinks}
+        
         blocking_cost = self._calculate_blocking_cost(node.blocking_moves, node.empty_lanes)
         priority_penalty = self._calculate_priority_violation_penalty(node, source_ids, sink_ids)
         priority_blocking_penalty = self._calculate_priority_blocking_penalty(node, sink_ids)
         premature_storage_penalty = self._calculate_premature_storage_penalty(node, sink_ids)
         
-        return storage_cost + retrieval_cost + blocking_cost + priority_penalty + priority_blocking_penalty + premature_storage_penalty
+        return blocking_cost + priority_penalty + priority_blocking_penalty + premature_storage_penalty
+
+    def calculate_h_cost(self, node: AStarNode) -> float:
+        """
+        Calculate heuristic cost for the node. 
+        DEPRECATED: Use calculate_base_h_cost and calculate_penalty_h_cost instead for lazy evaluation.
+        """
+        return self.calculate_base_h_cost(node) + self.calculate_penalty_h_cost(node)
     
     def _calculate_priority_blocking_penalty(self, node: AStarNode, sink_ids: Set[int]) -> float:
         """
@@ -1006,10 +1021,21 @@ class AStarSolver:
         while open_set:
             if self._should_timeout():
                 if self.config.verbose:
-                    print("A* search timed out.")
+                     print("A* search timed out.")
                 return None, None, self.unit_load_manager.ul_priority_map
             
             current_node = heapq.heappop(open_set)
+
+            # Lazy Evaluation: Calculate expensive penalties only when node is popped
+            if not current_node.is_fully_evaluated:
+                penalties = self.heuristic_calc.calculate_penalty_h_cost(current_node)
+                current_node.h_cost = current_node._h_cost_base + penalties
+                current_node.is_fully_evaluated = True
+                
+                # Push back to heap with updated cost
+                heapq.heappush(open_set, current_node)
+                continue
+
             state_key = current_node.get_state_key()
 
             if state_key in closed_set:
@@ -1096,7 +1122,13 @@ class AStarSolver:
             tabu_list=[],
             retrieval_sequence=[]
         )
-        start_node.h_cost = self.heuristic_calc.calculate_h_cost(start_node)
+        # Use full heuristic for start node
+        base_h = self.heuristic_calc.calculate_base_h_cost(start_node)
+        penalty_h = self.heuristic_calc.calculate_penalty_h_cost(start_node)
+        start_node.h_cost = base_h + penalty_h
+        start_node._h_cost_base = base_h
+        start_node.is_fully_evaluated = True
+        
         return start_node
 
     def _is_goal_state(self, node: AStarNode) -> bool:
@@ -1225,6 +1257,17 @@ class AStarSolver:
         state_key = successor.get_state_key()
         if state_key in self.heuristic_cache:
             successor.h_cost = self.heuristic_cache[state_key]
+            successor.is_fully_evaluated = True 
+        else:
+             # Lazy Evaluation: Only calculate base cost initially
+            base_cost = self.heuristic_calc.calculate_base_h_cost(successor)
+            successor._h_cost_base = base_cost
+            successor.is_fully_evaluated = False
+            # h_cost is not set yet, f_cost will use _h_cost_base temporarily
+            
+        return successor
+        if state_key in self.heuristic_cache:
+            successor.h_cost = self.heuristic_cache[state_key]
         else:
             successor.h_cost = self.heuristic_calc.calculate_h_cost(successor)
             self.heuristic_cache[state_key] = successor.h_cost
@@ -1278,11 +1321,26 @@ class MoveGenerator:
                                 not slot.is_empty(),  # False (empty) sorts before True (has ULs)
                                 self.distance_calc.dist_matrix[slot.ap_id][self.distance_calc.sink_ap]
                             ))
+
+        # Pruning: Cluster slots by cost and take representatives
+        unique_costs = set()
+        filtered_slots = []
+        
+        for slot in sorted_slots:
+            cost = self.distance_calc.dist_matrix[self.distance_calc.source_ap][slot.ap_id]
+            # Round cost to group similar slots
+            cost_key = round(cost, 1) 
+            
+            if cost_key not in unique_costs:
+                unique_costs.add(cost_key)
+                filtered_slots.append(slot)
+            
+            if len(filtered_slots) >= 3: # Limit to max 3 different storage options
+                break
         
         for ul_to_store in uls_to_store:
-            # Consider top slots by distance (limit to 2 for performance)
-            # H-cost will naturally prefer empty lanes via blocking and lane utilization penalties
-            slots_to_consider = sorted_slots[:min(8, len(sorted_slots))]
+            # Consider filtered slots
+            slots_to_consider = filtered_slots
 
             for slot in slots_to_consider:
                 # Check tabu, but allow if this is a move involving the SAME unit load
@@ -1541,13 +1599,26 @@ class MoveGenerator:
         # Add empty slots in partially filled lanes
         for slot in empty_slots:
             # Skip slots in empty lanes (already added above)
-            if slot not in [lane for lane in empty_lanes]:
+            is_empty_lane = False
+            for el in empty_lanes:
+                if el.ap_id == slot.ap_id:
+                    is_empty_lane = True
+                    break
+            
+            if not is_empty_lane:
                 # Only add if the lane has at least one empty slot
                 reshuffle_targets.append(('empty_slot', slot))
         
         if not reshuffle_targets:
             return []
 
+        # OPTIMIZATION: Prune reshuffle targets
+        # Sort targets by distance from blocking lane to target (reshuffle distance)
+        # We only really need one "good" reshuffle move per blocker to resolve it.
+        # Trying 2-3 targets (e.g. closest empty lane + closest empty slot) is usually sufficient.
+        
+        limit_per_blocker = 2  # Max targets to try per blocking UL
+        
         for move in blocking_moves[:self.config.max_reshuffle_branching]:
             ul_to_move_id = move['ul_id']
             from_lane_ap_id = move['from_lane'].ap_id
@@ -1556,7 +1627,15 @@ class MoveGenerator:
             if not ul_to_move:
                 continue
 
-            for target_type, target in reshuffle_targets:
+            # Sort targets by distance from this blocker
+            sorted_targets = sorted(reshuffle_targets, 
+                                  key=lambda t: self.distance_calc.dist_matrix[from_lane_ap_id][t[1].ap_id])
+            
+            targets_tried = 0
+            for target_type, target in sorted_targets:
+                if targets_tried >= limit_per_blocker:
+                    break
+                    
                 target_ap_id = target.ap_id
                 
                 # Can't reshuffle within the same lane
@@ -1588,10 +1667,12 @@ class MoveGenerator:
                 if move_info:
                     successor = create_successor_fn(
                         current_node, move_info, new_buffer_state,
-                        current_node.unit_loads_at_sources, current_node.unit_loads_at_sinks
+                        current_node.unit_loads_at_sources, 
+                        current_node.unit_loads_at_sinks
                     )
                     successors.append(successor)
-
+                    targets_tried += 1
+            
         return successors
     
     def _create_reshuffle_move(self, ul_to_move: UnitLoad, move_data: Dict, 

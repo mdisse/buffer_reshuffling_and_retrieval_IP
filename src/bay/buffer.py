@@ -606,7 +606,11 @@ class Buffer:
         
         # Copy the virtual lanes (this is the main mutable state)
         if self.virtual_lanes is not None:
-            new_buffer.virtual_lanes = [lane.copy() for lane in self.virtual_lanes]
+            # OPTIMIZATION: Use shallow copy of the list!
+            # VirtualLane objects are treated as immutable during search (add_load/remove_load returns NEW objects).
+            # This allows sharing unmodified lane objects between buffer states,
+            # drastically reducing memory usage and copy time in A*.
+            new_buffer.virtual_lanes = list(self.virtual_lanes)
         else:
             new_buffer.virtual_lanes = None
             

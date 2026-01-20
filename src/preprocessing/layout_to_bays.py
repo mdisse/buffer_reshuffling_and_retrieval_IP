@@ -16,9 +16,9 @@ from src.bay.source import Source
 
 def __read_layout(filename: str) -> np.ndarray:
     """parses the csv file into a numpy array"""
-    with open(filename) as csvfile:
+    with open(filename, encoding='utf-8-sig') as csvfile:
         dialect = csv.Sniffer().sniff(csvfile.readline())
-    strings = np.loadtxt(filename, delimiter=dialect.delimiter, dtype=str)
+    strings = np.loadtxt(filename, delimiter=dialect.delimiter, dtype=str, encoding='utf-8-sig')
     if strings[0, -1] == '':
         strings = strings[:, :-1]
     layout = strings.astype(int)
