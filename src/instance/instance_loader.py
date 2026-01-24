@@ -23,7 +23,11 @@ class InstanceLoader():
         self.as_max = instance_file["as_max"]
         self.time_window_length = instance_file["time_window_length"]
         example_bay = list(instance_file["bay_info"].keys())[0]
-        self.access_directions = self._create_access_directions_dict(instance_file["bay_info"][example_bay]["access_directions"])
+        # Iterate over all values in the bay_info dictionary to find all access directions
+        all_directions = set()
+        for bay_info in instance_file["bay_info"].values():
+            all_directions.update(bay_info["access_directions"])
+        self.access_directions = self._create_access_directions_dict(list(all_directions))
         self.inital_state = instance_file["initial_state"]
         self.bay_info = instance_file["bay_info"]
         # Try except here to catch old instance files where the sink was not implemented yet

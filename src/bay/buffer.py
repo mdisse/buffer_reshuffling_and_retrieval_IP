@@ -440,11 +440,13 @@ class Buffer:
         """
         lane_to_modify = self._find_lane_for_ul(ul_id)
         if lane_to_modify:
-            # Find the lane in the list by ap_id and update it
-            for i, lane in enumerate(self.virtual_lanes):
-                if lane.ap_id == lane_to_modify.ap_id:
-                    self.virtual_lanes[i], _ = lane.remove_specific_load(ul_id)
-                    break
+            # Find the lane using the object identity directly to handle duplicate ap_ids
+            try:
+                i = self.virtual_lanes.index(lane_to_modify)
+                self.virtual_lanes[i], _ = lane_to_modify.remove_specific_load(ul_id)
+            except ValueError:
+                # Should not happen if _find_lane_for_ul is correct
+                pass
 
     def get_hashable_state(self) -> tuple:
         """Creates a hashable representation from the virtual lanes."""

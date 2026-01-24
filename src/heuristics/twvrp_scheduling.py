@@ -554,8 +554,10 @@ class TWVRPSchedulingSolver:
             for v in range(self.num_vehicles):
                 is_assigned = move_assignment_vars[(move.move_id, v)]
                 
-                # Add from_lane occupancy (if it's a buffer lane)
-                if from_lane not in ['source', 'sink']:
+                # Add from_lane occupancy
+                # We record occupancy for all lanes including source/sink, 
+                # but will only enforce NoOverlap for buffer lanes later.
+                if True:
                     # Block the from_lane for the entire move duration IF assigned to vehicle v
                     lane_interval = model.NewOptionalIntervalVar(
                         move_starts[move.move_id],
@@ -569,8 +571,8 @@ class TWVRPSchedulingSolver:
                         lane_intervals[from_lane] = []
                     lane_intervals[from_lane].append(lane_interval)
                 
-                # Add to_lane occupancy (if it's a buffer lane and different from from_lane)
-                if to_lane not in ['source', 'sink'] and to_lane != from_lane:
+                # Add to_lane occupancy (if different from from_lane)
+                if to_lane != from_lane:
                     # Block the to_lane for the entire move duration IF assigned to vehicle v
                     lane_interval = model.NewOptionalIntervalVar(
                         move_starts[move.move_id],
@@ -586,8 +588,19 @@ class TWVRPSchedulingSolver:
         
         # Add no-overlap constraints for each lane (only one robot at a time)
         for lane_id, intervals_list in lane_intervals.items():
-            if len(intervals_list) > 1:
-                model.AddNoOverlap(intervals_list)
+            # Check if lane_id is Source or Sink
+            is_source_or_sink = (str(lane_id) == str(self.source_lane_id) or 
+                                 str(lane_id) == str(self.sink_lane_id) or 
+                                 str(lane_id) in ['source', 'sink'])
+            
+            # Only enforce NoOverlap for real buffer lanes (not source/sink)
+            if not is_source_or_sink:
+                if len(intervals_list) > 1:
+                    model.AddNoOverlap(intervals_list)
+            else:
+                # Source/Sink have infinite capacity (or capacity > 1)
+                # So we do NOT add the NoOverlap constraint
+                pass
         
         if self.verbose:
             print(f"Lane occupancy constraints: {sum(len(v) for v in lane_intervals.values())} intervals across {len(lane_intervals)} lanes")

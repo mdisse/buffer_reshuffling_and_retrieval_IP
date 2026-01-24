@@ -185,7 +185,7 @@ class AStarNode:
         self.move = move
         self.g_cost = g_cost
         self.current_time = current_time
-        self.weight = 2
+        self.weight = 3
         self.tabu_list = tabu_list if tabu_list is not None else []
         self.retrieval_sequence = retrieval_sequence if retrieval_sequence is not None else []
         self._h_cost: Optional[float] = None
@@ -635,7 +635,8 @@ class HeuristicCalculator:
             return 0.0
         
         # Fleet-size-dependent blocking multiplier: 10 / fleet_size
-        BLOCKING_MULTIPLIER = 5.0 / self.fleet_size
+        # BLOCKING_MULTIPLIER = 5.0 / self.fleet_size
+        BLOCKING_MULTIPLIER = 5.0 
         
         total_cost = 0.0
         base_costs = []  # Track base costs (before multiplier) for analysis
@@ -969,7 +970,6 @@ class AStarSolver:
         
         if self.config.verbose:
             print(f"A* solver initialized with {len(self.unit_load_manager.unit_loads)} unit loads.")
-            print(f"  Fleet size: {self.fleet_size} (tabu tenure will be {self.fleet_size - 1})")
 
     def _initialize_unit_load_objects(self, all_unit_loads) -> List[UnitLoad]:
         """Initialize unit load objects from various input formats."""
@@ -1205,9 +1205,10 @@ class AStarSolver:
         # Create new tabu list - carry over parent's tabu list and add new tabu positions
         new_tabu_list = list(current_node.tabu_list)  # Copy parent's tabu list
         # TABU_TENURE = self.fleet_size - 1  
-        num_lanes = new_buffer_state.get_num_non_source_sink_lanes()
-        max_tenure = max(1, int(num_lanes / 2) - 1)
-        TABU_TENURE = min(self.fleet_size - 1, max_tenure)
+        # num_lanes = new_buffer_state.get_num_non_source_sink_lanes()
+        # max_tenure = max(1, int(num_lanes / 2) - 1)
+        # TABU_TENURE = min(self.fleet_size - 1, max_tenure)
+        TABU_TENURE = 1 
 
         if move_info:
             tabu_position = None

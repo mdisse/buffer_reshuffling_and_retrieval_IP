@@ -153,6 +153,21 @@ def __find_access_points(layout: np.ndarray, bays: List, access_directions: dict
                     ap = AccessPoint(bay, bay.x + bay.width, bay.y + j, bay.width - 1, j, 'east')
                     bay_aps.append(ap)
 
+        # Filter APs to prevent overlapping virtual lanes and prefer shallower lanes
+        vertical_aps = [ap for ap in bay_aps if ap.direction in ['north', 'south']]
+        horizontal_aps = [ap for ap in bay_aps if ap.direction in ['east', 'west']]
+        
+        if vertical_aps and horizontal_aps:
+            if bay.width < bay.length:
+                # Width is smaller -> Horizontal access gives shallower lanes (depth=width)
+                bay_aps = horizontal_aps
+            elif bay.length < bay.width:
+                # Length is smaller -> Vertical access gives shallower lanes (depth=length)
+                bay_aps = vertical_aps
+            else:
+                 # Tie-break: Prefer Vertical
+                 bay_aps = vertical_aps
+
         bay.access_points = bay_aps
 
 

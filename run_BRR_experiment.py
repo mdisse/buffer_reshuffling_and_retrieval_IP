@@ -90,14 +90,16 @@ def generate_instances():
         # 'Size_3x3_Layout_1x1_sink',
     ]
     ad = [
-        {"north" : True, "east" : True, "south" : True, "west" : True},
-        {"north" : False, "east" : False, "south" : True, "west" : False},
-        {"north" : False, "east" : True, "south" : True, "west" : False}, 
-        {"north" : True, "east" : False, "south" : True, "west" : False}, 
+        # {"north" : True, "east" : True, "south" : True, "west" : True},
+        # {"north" : False, "east" : False, "south" : True, "west" : False},
+        # {"north" : False, "east" : True, "south" : True, "west" : False}, 
+        {"north" : False, "east" : True, "south" : True, "west" : True}, 
+        # {"north" : True, "east" : False, "south" : True, "west" : False}, 
     ]
     # seeds = [i for i in range(10)]
-    seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    seeds = [0, 1, 2, 3, 4]
     fill_levels = [i/10 for i in range(7, 11)]
+    # fill_levels = [0.1]
     # fill_levels = [0.1]
     # time_window_lengths = [i for i in range(30, 61, 10)]
     time_window_lengths = [50]

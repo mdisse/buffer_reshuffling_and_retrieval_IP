@@ -142,6 +142,7 @@ def process_file(file):
     warehouse = np.loadtxt(layout_file, delimiter=',', dtype=int)
     colors = {
         -5: 'lightgrey', # Aisles
+        0: 'gray', # Obstacles
         1: 'white', # Slots
         2: 'green', # Sink
         3: 'blue', # Source
@@ -149,6 +150,7 @@ def process_file(file):
     }
     legend = {
         -5: 'Aisles',
+        0: 'Obstacles',
         1: 'Slots',
         2: 'Sink',
         3: 'Source',
@@ -163,6 +165,7 @@ def process_file(file):
 
     if not source:
         del colors[3]
+        del legend[3]
 
     bays = data["initial_state"]
     init_dict = {}
