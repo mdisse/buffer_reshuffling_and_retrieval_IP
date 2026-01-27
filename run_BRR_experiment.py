@@ -97,8 +97,8 @@ def generate_instances():
         # {"north" : True, "east" : False, "south" : True, "west" : False}, 
     ]
     # seeds = [i for i in range(10)]
-    seeds = [0, 1, 2, 3, 4]
-    fill_levels = [i/10 for i in range(7, 11)]
+    seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    fill_levels = [i/10 for i in range(5, 13)]
     # fill_levels = [0.1]
     # fill_levels = [0.1]
     # time_window_lengths = [i for i in range(30, 61, 10)]

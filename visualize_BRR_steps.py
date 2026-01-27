@@ -143,7 +143,7 @@ def process_file(file):
     colors = {
         -5: 'lightgrey', # Aisles
         0: 'gray', # Obstacles
-        1: 'white', # Slots
+        # 1: 'white', # Slots
         2: 'green', # Sink
         3: 'blue', # Source
         "ap": "red", # Access Points
@@ -151,7 +151,7 @@ def process_file(file):
     legend = {
         -5: 'Aisles',
         0: 'Obstacles',
-        1: 'Slots',
+        # 1: 'Slots',
         2: 'Sink',
         3: 'Source',
         "ap": "Access Points",

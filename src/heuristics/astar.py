@@ -185,7 +185,7 @@ class AStarNode:
         self.move = move
         self.g_cost = g_cost
         self.current_time = current_time
-        self.weight = 3
+        self.weight = 1
         self.tabu_list = tabu_list if tabu_list is not None else []
         self.retrieval_sequence = retrieval_sequence if retrieval_sequence is not None else []
         self._h_cost: Optional[float] = None
@@ -1018,11 +1018,23 @@ class AStarSolver:
         closed_set = set()
         nodes_explored = 0
 
+        # MEMORY OPTIMIZATION: Max nodes in priority queue
+        # If queue exceeds this, we prune the worst half.
+        MAX_OPEN_SET_SIZE = 5000
+
         while open_set:
             if self._should_timeout():
                 if self.config.verbose:
                      print("A* search timed out.")
                 return None, None, self.unit_load_manager.ul_priority_map
+            
+            # MEMORY PROTECTION: Prune open set if it gets too large
+            if len(open_set) > MAX_OPEN_SET_SIZE:
+                 # Keep only the top 50% best nodes (lowest f_cost)
+                 # heapq structure is a list, but not strictly sorted. We must sort to prune correctly.
+                 open_set.sort() 
+                 open_set = open_set[:int(MAX_OPEN_SET_SIZE / 2)]
+                 heapq.heapify(open_set)
             
             current_node = heapq.heappop(open_set)
 
@@ -1149,8 +1161,10 @@ class AStarSolver:
         successors.extend(self.move_generator.generate_reshuffling_moves(
             current_node, self._create_successor))
         
-        # Apply aggressive pruning for all problem sizes  
-        max_successors = 20
+        # MEMORY/PERFORMANCE OPTIMIZATION: Tighter Beam Width
+        # Reduced from 20 to 8. 
+        # For large instances, we simply cannot afford to branch 20 ways at every step.
+        max_successors = 8
         if len(successors) > max_successors:
             successors.sort(key=lambda x: x.f_cost)
             successors = successors[:max_successors]
@@ -1303,10 +1317,10 @@ class MoveGenerator:
         uls_to_store.sort(key=lambda ul: (ul.retrieval_priority, ul.id))
         uls_to_store = uls_to_store[:1]
 
-        # if self.config.verbose:
-        #     print(f"DEBUG: Generating storage moves. Sources: {len(current_node.unit_loads_at_sources)}, Min Prio: {min_priority}, Candidates: {len(uls_to_store)}")
-
-        sim_buffer_state = current_node.buffer_state.copy()
+        # OPTIMIZATION: Use the existing buffer state directly.
+        # Do NOT copy it here. We will check validity against this read-only state
+        # and only copy inside _create_store_move if the move is valid.
+        sim_buffer_state = current_node.buffer_state
         # Use cached empty slots
         empty_slots = current_node.empty_slots
         
@@ -1342,7 +1356,7 @@ class MoveGenerator:
         for ul_to_store in uls_to_store:
             # Consider filtered slots
             slots_to_consider = filtered_slots
-
+            
             for slot in slots_to_consider:
                 # Check tabu, but allow if this is a move involving the SAME unit load
                 # (aspiration criterion: override tabu if it's for the same UL)
@@ -1380,17 +1394,26 @@ class MoveGenerator:
     def _create_store_move(self, ul_to_store: UnitLoad, slot, sim_buffer_state, 
                           current_sources: List[UnitLoad]) -> Tuple[Optional[MoveInfo], any, List[UnitLoad]]:
         """Create a store move."""
-        temp_buffer_state = sim_buffer_state.copy()
-        target_lane_in_copy = next(
-            (lane for lane in temp_buffer_state.virtual_lanes if lane.ap_id == slot.ap_id), 
-            None
-        )
-        if not target_lane_in_copy:
+        # OPTIMIZATION: Check target feasibility BEFORE copying buffer state.
+        # We need to find the target lane index in the virtual lanes list.
+        target_lane_idx = -1
+        target_lane = None
+        for i, lane in enumerate(sim_buffer_state.virtual_lanes):
+            if lane.ap_id == slot.ap_id:
+                target_lane = lane
+                target_lane_idx = i
+                break
+        
+        if target_lane is None:
             return None, None, []
-
-        target_tier = self._find_target_tier(target_lane_in_copy)
+            
+        target_tier = self._find_target_tier(target_lane)
         if target_tier is None:
             return None, None, []
+
+        # Only copy buffer state now that we know the move is valid
+        temp_buffer_state = sim_buffer_state.copy()
+        target_lane_in_copy = temp_buffer_state.virtual_lanes[target_lane_idx]
 
         temp_buffer_state.add_unit_load(ul_to_store, target_lane_in_copy)
         new_sources = [ul for ul in current_sources if ul.id != ul_to_store.id]
@@ -1574,9 +1597,10 @@ class MoveGenerator:
     
     def generate_reshuffling_moves(self, current_node: AStarNode, 
                                   create_successor_fn) -> List[AStarNode]:
-        """Generate reshuffling moves."""
+        """Generate reshuffling moves with prioritization: Empty > Safe > Unsafe."""
         successors = []
-        sim_buffer_state = current_node.buffer_state.copy()
+        # OPTIMIZATION: Avoid premature copying of buffer state.
+        sim_buffer_state = current_node.buffer_state
         
         # Use cached blocking moves
         blocking_moves = current_node.blocking_moves
@@ -1584,75 +1608,113 @@ class MoveGenerator:
         if not blocking_moves:
             return []
         
-        # Get both empty lanes AND empty slots
+        # Get empty lanes and empty slots
         empty_lanes = current_node.empty_lanes
         empty_slots = current_node.empty_slots
         tabu_slots = current_node.tabu_list
         
-        # Combine empty lanes and empty slots for reshuffle targets
-        # Empty lanes are preferred, but we also allow reshuffling to empty slots in partially filled lanes
-        reshuffle_targets = []
+        # Map AP ID to VirtualLane object for quick lookup
+        lane_map = {lane.ap_id: lane for lane in sim_buffer_state.virtual_lanes}
         
-        # Add empty lanes first (preferred)
-        for lane in empty_lanes:
-            reshuffle_targets.append(('empty_lane', lane))
+        # Loop 1: Process limited number of blocking unit loads
+        # This controls the "width" of our search on the problem side (which problems to fix)
+        num_blockers_to_process = min(len(blocking_moves), self.config.max_reshuffle_branching)
         
-        # Add empty slots in partially filled lanes
-        for slot in empty_slots:
-            # Skip slots in empty lanes (already added above)
-            is_empty_lane = False
-            for el in empty_lanes:
-                if el.ap_id == slot.ap_id:
-                    is_empty_lane = True
-                    break
-            
-            if not is_empty_lane:
-                # Only add if the lane has at least one empty slot
-                reshuffle_targets.append(('empty_slot', slot))
-        
-        if not reshuffle_targets:
-            return []
-
-        # OPTIMIZATION: Prune reshuffle targets
-        # Sort targets by distance from blocking lane to target (reshuffle distance)
-        # We only really need one "good" reshuffle move per blocker to resolve it.
-        # Trying 2-3 targets (e.g. closest empty lane + closest empty slot) is usually sufficient.
-        
-        limit_per_blocker = 2  # Max targets to try per blocking UL
-        
-        for move in blocking_moves[:self.config.max_reshuffle_branching]:
+        for move in blocking_moves[:num_blockers_to_process]:
             ul_to_move_id = move['ul_id']
             from_lane_ap_id = move['from_lane'].ap_id
+            
+            # 1. PREVENT WALKING: Check if this UL was just moved via reshuffle
+            # This forces the solver to find a good spot in one hop rather than hopping around.
+            # If the last move reshuffled UL X, don't reshuffle UL X again immediately.
+            if current_node.move and current_node.move.move_type == MOVE_TYPE_RESHUFFLE:
+                if current_node.move.ul_id == ul_to_move_id:
+                    continue
             
             ul_to_move = current_node.unit_load_manager.get_ul_by_id(ul_to_move_id)
             if not ul_to_move:
                 continue
 
-            # Sort targets by distance from this blocker
-            sorted_targets = sorted(reshuffle_targets, 
-                                  key=lambda t: self.distance_calc.dist_matrix[from_lane_ap_id][t[1].ap_id])
+            # 2. IDENTIFY AND SCORE TARGETS
+            # We want to find the best places to put this blocker.
+            # Format: (score, distance, target_lane)
+            # Score 0: Empty Lane (Best - Guaranteed safe)
+            # Score 1: Safe Lane (Good - partially filled, but new UL is higher priority than top UL)
+            # Score 2: Unsafe Lane (Bad - partially filled, new UL is lower priority than top UL, creating new block)
+            targets_with_scores = []
             
-            targets_tried = 0
-            for target_type, target in sorted_targets:
-                if targets_tried >= limit_per_blocker:
-                    break
-                    
-                target_ap_id = target.ap_id
-                
-                # Can't reshuffle within the same lane
-                if from_lane_ap_id == target_ap_id:
+            # Track processed lanes to avoid duplicates between empty_lanes and empty_slots
+            processed_lane_ids = set()
+            
+            # A. Evaluate Empty Lanes (Score 0)
+            for lane in empty_lanes:
+                if lane.ap_id == from_lane_ap_id: continue
+                dist = self.distance_calc.dist_matrix[from_lane_ap_id][lane.ap_id]
+                targets_with_scores.append((0, dist, lane))
+                processed_lane_ids.add(lane.ap_id)
+            
+            # B. Evaluate Slots in Partially Filled Lanes (Score 1 or 2)
+            for slot in empty_slots:
+                if slot.ap_id in processed_lane_ids:
                     continue
                 
-                # Check tabu, but allow if this is a move involving the SAME unit load
-                # (aspiration criterion: override tabu if it's for the same UL)
+                if slot.ap_id == from_lane_ap_id:
+                    continue
+                
+                target_lane = lane_map.get(slot.ap_id)
+                if not target_lane: continue
+                
+                # Check Safety: Will placing ul_to_move here create a NEW block?
+                # We place items at the "front" (lowest available index).
+                # We block if: Priority(New) >= Priority(Top_Existing)
+                # (Remember: Lower numerical value = Higher Priority)
+                
+                # Find the top-most exposed UL in this lane
+                top_exposed_ul_id = 0
+                for val in target_lane.stacks:
+                    if val != 0:
+                        top_exposed_ul_id = val
+                        break 
+                
+                is_safe = False
+                if top_exposed_ul_id != 0:
+                    top_ul = current_node.unit_load_manager.get_ul_by_id(top_exposed_ul_id)
+                    if top_ul:
+                        p_new = ul_to_move.priority
+                        p_top = top_ul.priority
+                        
+                        # SAFE if New is Higher Priority (lower val) than Top
+                        if p_new < p_top:
+                            is_safe = True
+                else:
+                    # Should have been caught by empty_lanes, but just in case
+                    is_safe = True
+                
+                score = 1 if is_safe else 2
+                dist = self.distance_calc.dist_matrix[from_lane_ap_id][slot.ap_id]
+                targets_with_scores.append((score, dist, target_lane))
+                processed_lane_ids.add(slot.ap_id)
+
+            # 3. SORT AND SELECT TARGETS
+            # Primary sort key: Score (lower is better)
+            # Secondary sort key: Distance (lower is better, assuming closer reshuffles are cheaper)
+            targets_with_scores.sort(key=lambda x: (x[0], x[1]))
+            
+            # Loop 2: Process limited number of destinations per blocker
+            # This controls the "width" of our search on the solution side (where to put it)
+            limit_per_blocker = 10 
+            selected_targets = [t[2] for t in targets_with_scores[:limit_per_blocker]]
+
+            for target_lane in selected_targets:
+                target_ap_id = target_lane.ap_id
+                
+                # Check tabu logic
                 is_tabu = target_ap_id in tabu_slots
                 if is_tabu:
-                    # Check if the last move to this position involved the same UL
                     override_tabu = False
                     temp_node = current_node
                     while temp_node and temp_node.move:
                         if temp_node.move.to_pos == target_ap_id:
-                            # Found the move that made this position tabu
                             if temp_node.move.ul_id == ul_to_move_id:
                                 override_tabu = True
                             break
@@ -1660,9 +1722,10 @@ class MoveGenerator:
                     
                     if not override_tabu:
                         continue
-
+                
+                # Generate the actual move
                 move_info, new_buffer_state = self._create_reshuffle_move(
-                    ul_to_move, move, target, sim_buffer_state
+                    ul_to_move, move, target_lane, sim_buffer_state
                 )
                 
                 if move_info:
@@ -1672,7 +1735,6 @@ class MoveGenerator:
                         current_node.unit_loads_at_sinks
                     )
                     successors.append(successor)
-                    targets_tried += 1
             
         return successors
     
@@ -1681,25 +1743,35 @@ class MoveGenerator:
         """Create a reshuffle move."""
         from_lane_ap_id = move_data['from_lane'].ap_id
         
-        temp_buffer_state = sim_buffer_state.copy()
-        from_lane_in_copy = next(
-            (lane for lane in temp_buffer_state.virtual_lanes if lane.ap_id == from_lane_ap_id), 
-            None
-        )
-        to_lane_in_copy = next(
-            (lane for lane in temp_buffer_state.virtual_lanes if lane.ap_id == empty_lane_template.ap_id), 
-            None
-        )
+        # OPTIMIZATION: Check validity before copying buffer state
+        from_lane_idx = -1
+        to_lane_idx = -1
         
-        if not from_lane_in_copy or not to_lane_in_copy:
-            return None, None
-
-        from_tier = self._find_from_tier(from_lane_in_copy, ul_to_move.id)
-        to_tier = self._find_target_tier(to_lane_in_copy)
+        for i, lane in enumerate(sim_buffer_state.virtual_lanes):
+            if lane.ap_id == from_lane_ap_id:
+                from_lane_idx = i
+            elif lane.ap_id == empty_lane_template.ap_id:
+                to_lane_idx = i
+                
+        if from_lane_idx == -1 or to_lane_idx == -1:
+             return None, None
+             
+        from_lane = sim_buffer_state.virtual_lanes[from_lane_idx]
+        to_lane = sim_buffer_state.virtual_lanes[to_lane_idx]
+        
+        from_tier = self._find_from_tier(from_lane, ul_to_move.id)
+        to_tier = self._find_target_tier(to_lane)
         
         if from_tier is None or to_tier is None:
-            return None, None
-
+             return None, None
+        
+        # Only copy buffer state now that we know the move is valid
+        temp_buffer_state = sim_buffer_state.copy()
+        
+        # Get lanes from the copied state
+        from_lane_in_copy = temp_buffer_state.virtual_lanes[from_lane_idx]
+        to_lane_in_copy = temp_buffer_state.virtual_lanes[to_lane_idx]
+        
         temp_buffer_state.move_unit_load(ul_to_move.id, from_lane_in_copy, to_lane_in_copy)
         
         move_info = MoveInfo(
