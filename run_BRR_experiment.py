@@ -74,7 +74,8 @@ def create_paths(instance):
 def generate_instances():
     files = [
         # '8x3',
-        'manual',
+        # 'manual',
+        'manual2',
         # 'Size_3x3_Layout_1x1_sink_source',
         # 'Size_4x4_Layout_1x1_sink_source',
         # 'Size_5x5_Layout_1x1_sink_source',
