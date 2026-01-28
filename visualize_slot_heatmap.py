@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate frequency heatmaps for slot usage.")
-    parser.add_argument('--instance_type', type=str, required=True, help='Instance type (e.g. manual, manual2)')
+    parser.add_argument('--instance-type', type=str, required=True, help='Instance type (e.g. manual, manual2)')
     return parser.parse_args()
 
 def ap_id_to_coords(ap_id, slot, data):
@@ -158,7 +158,7 @@ def main():
         print("No unit_loads_* folders containing heuristic JSONs found.")
         return
 
-    output_dir = "heatmaps"
+    output_dir = os.path.join("heatmaps", args.instance_type, "slots")
     os.makedirs(output_dir, exist_ok=True)
     
     for ul_config, files in groups.items():
@@ -186,7 +186,7 @@ def main():
         plt.figure(figsize=(10, 8))
         
         # Plot heatmap
-        im = plt.imshow(heatmap, cmap='hot', interpolation='nearest')
+        im = plt.imshow(heatmap, cmap='plasma', interpolation='nearest')
         cbar = plt.colorbar(im)
         cbar.set_label('Total Occupied Timesteps')
         
@@ -213,8 +213,9 @@ def main():
         plt.xlabel("Column x")
         plt.ylabel("Row y")
         
-        save_path = os.path.join(output_dir, f"{args.instance_type}_{ul_config}_heatmap.png")
-        plt.savefig(save_path)
+        plt.tight_layout()
+        save_path = os.path.join(output_dir, f"{ul_config}_heatmap.png")
+        plt.savefig(save_path, bbox_inches='tight')
         plt.close()
         print(f"Saved {save_path}")
 
