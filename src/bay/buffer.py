@@ -11,12 +11,14 @@ from src.bay.virtual_lane import VirtualLane
 
 
 class Buffer:
-    def __init__(self, filename: str, access_directions : dict):
+    def __init__(self, filename: str, access_directions : dict, is_manual: bool = False):
         """
         Generates a Buffer object based on a given layout. 
         Doesn't generate the stacks, leaves the bays empty.
         """
-        dictionary = layout_to_bays(filename, access_directions)
+        self.filename = filename
+        self.is_manual = is_manual
+        dictionary = layout_to_bays(filename, access_directions, is_manual=is_manual)
         self.bays = dictionary["bays"]
         self.path_nodes = dictionary["path_nodes"]
         self.edges = dictionary["edges"]

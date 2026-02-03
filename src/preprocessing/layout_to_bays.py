@@ -111,7 +111,7 @@ def __find_paths(layout: np.ndarray):
     return path_nodes, path_edges
 
 
-def __find_access_points(layout: np.ndarray, bays: List, access_directions: dict):
+def __find_access_points(layout: np.ndarray, bays: List, access_directions: dict, filename: str = "", is_manual: bool = False):
     layout_length, layout_width = layout.shape
     is_path = (layout == -5)
     for bay in bays:
@@ -153,25 +153,29 @@ def __find_access_points(layout: np.ndarray, bays: List, access_directions: dict
                     ap = AccessPoint(bay, bay.x + bay.width, bay.y + j, bay.width - 1, j, 'east')
                     bay_aps.append(ap)
 
-        # Filter APs to prevent overlapping virtual lanes and prefer shallower lanes
-        vertical_aps = [ap for ap in bay_aps if ap.direction in ['north', 'south']]
-        horizontal_aps = [ap for ap in bay_aps if ap.direction in ['east', 'west']]
-        
-        if vertical_aps and horizontal_aps:
-            if bay.width < bay.length:
-                # Width is smaller -> Horizontal access gives shallower lanes (depth=width)
-                bay_aps = horizontal_aps
-            elif bay.length < bay.width:
-                # Length is smaller -> Vertical access gives shallower lanes (depth=length)
-                bay_aps = vertical_aps
-            else:
-                 # Tie-break: Prefer Vertical
-                 bay_aps = vertical_aps
+        # Step: Filter APs ONLY for manual instances to prevent overlapping virtual lanes
+        # and prefer shallower lanes (the "hardcoded" heuristic split)
+        # For non-manual instances, keep ALL available access points so that the 
+        # NetworkFlowModel can determine the optimal split later in the pipeline
+        if is_manual:
+            vertical_aps = [ap for ap in bay_aps if ap.direction in ['north', 'south']]
+            horizontal_aps = [ap for ap in bay_aps if ap.direction in ['east', 'west']]
+            
+            if vertical_aps and horizontal_aps:
+                if bay.width < bay.length:
+                    # Width is smaller -> Horizontal access gives shallower lanes (depth=width)
+                    bay_aps = horizontal_aps
+                elif bay.length < bay.width:
+                    # Length is smaller -> Vertical access gives shallower lanes (depth=length)
+                    bay_aps = vertical_aps
+                else:
+                    # Tie-break: Prefer Vertical
+                    bay_aps = vertical_aps
 
         bay.access_points = bay_aps
 
 
-def layout_to_bays(filename: str, access_directions: dict):
+def layout_to_bays(filename: str, access_directions: dict, is_manual: bool = False):
     """
     Parses a layout into bays and path graph
 
@@ -182,7 +186,7 @@ def layout_to_bays(filename: str, access_directions: dict):
     bays = __find_bays(layout)
     sinks = __find_sinks(layout)
     # We hardcode the access directions for the sink and source here to be true just for the north direction
-    __find_access_points(layout, sources + bays + sinks, access_directions)
+    __find_access_points(layout, sources + bays + sinks, access_directions, filename, is_manual=is_manual)
     path_nodes, path_edges = __find_paths(layout)
     return {
         "bays": bays,

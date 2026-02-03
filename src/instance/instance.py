@@ -43,6 +43,7 @@ class Instance():
         # try: 
         if instanceLoader is not None: 
             self.layout_file = instanceLoader.get_layout_filename()
+            self.instance_path = instanceLoader.get_instance_path()
             self.fill_level = instanceLoader.get_fill_level()
             self.max_p = instanceLoader.get_max_p()
             self.height = instanceLoader.get_height()
@@ -53,6 +54,14 @@ class Instance():
             self.fleet_size = instanceLoader.get_fleet_size()
             self.vehicle_speed = instanceLoader.get_vehicle_speed()
             self.handling_time = instanceLoader.get_handling_time()
+            
+            # Check if manual instance
+            self.is_manual = False
+            if self.instance_path and "manual" in self.instance_path.lower():
+                self.is_manual = True
+            elif self.layout_file and "manual" in self.layout_file.lower():
+                self.is_manual = True
+
             self._build_buffer()
             self.unit_loads = []
             self._populate_slots(instanceLoader=instanceLoader)
@@ -61,11 +70,18 @@ class Instance():
             self.time_window_length = instanceLoader.get_time_window_length()
         else: 
             self.layout_file = layout_file 
+            self.instance_path = None
             self.fill_level = fill_level
             self.max_p = max_p
             self.height = height
             self.seed = seed
             self.access_directions = access_directions
+            
+            # Check if manual instance
+            self.is_manual = False
+            if self.layout_file and "manual" in self.layout_file.lower():
+                self.is_manual = True
+
             self._build_buffer()
             self.sink = self.wh_initial.has_sinks()
             self.source = self.wh_initial.has_sources()
@@ -77,6 +93,7 @@ class Instance():
             self.time_window_length = time_window_length
             self.unit_loads = [] # stays empty when working with priorities
             self._populate_slots(exampleGenerator=exampleGenerator)
+        
         if self.wh_initial.has_sinks(): 
             self._check_feasibility_for_sinks()
         if self.wh_initial.has_sources():
@@ -109,8 +126,8 @@ class Instance():
 
     
     def _build_buffer(self):
-        self.wh_initial = Buffer(self.layout_file, self.access_directions) 
-        self.wh_reshuffled = Buffer(self.layout_file, self.access_directions) 
+        self.wh_initial = Buffer(self.layout_file, self.access_directions, is_manual=self.is_manual) 
+        self.wh_reshuffled = Buffer(self.layout_file, self.access_directions, is_manual=self.is_manual) 
 
     def _populate_slots(self, instanceLoader: InstanceLoader=None, exampleGenerator=None): 
         if instanceLoader is None and exampleGenerator is None: 

@@ -248,6 +248,9 @@ def main():
         for file_path in files:
             process_file(file_path, heatmap, warehouse)
 
+        if len(files) > 0:
+            heatmap /= len(files)
+
         # Mask Sink (2) and Source (3) areas to avoid biasing the scale
         # Find sink/source indices
         for target_val in [2, 3]:
@@ -279,11 +282,7 @@ def main():
         plt.imshow(heatmap_masked, cmap='plasma', interpolation='nearest', alpha=0.7)
         
         cbar = plt.colorbar()
-        cbar.set_label('Total Occupancy (Slots + Travel)')
-        
-        plt.title(f"Instance: {args.instance_type}, {ul_config}\nOccupancy Heatmap (Aisles)")
-        plt.xlabel("Column x")
-        plt.ylabel("Row y")
+        cbar.set_label('Average Occupancy (Slots + Travel)')
         
         plt.tight_layout()
         save_path = os.path.join(output_dir, f"{ul_config}_heatmap_aisles.png")

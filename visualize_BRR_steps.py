@@ -144,7 +144,7 @@ def process_file(file):
         -5: 'lightgrey', # Aisles
         0: 'gray', # Obstacles
         # 1: 'white', # Slots
-        2: 'green', # Sink
+        2: 'darkgreen', # Sink
         3: 'blue', # Source
         "ap": "red", # Access Points
     }

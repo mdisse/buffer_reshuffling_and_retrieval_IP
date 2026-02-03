@@ -182,13 +182,16 @@ def main():
         for file_path in files:
             process_file(file_path, heatmap, warehouse.shape)
             
+        if len(files) > 0:
+            heatmap /= len(files)
+
         # Plot
         plt.figure(figsize=(10, 8))
         
         # Plot heatmap
         im = plt.imshow(heatmap, cmap='plasma', interpolation='nearest')
         cbar = plt.colorbar(im)
-        cbar.set_label('Total Occupied Timesteps')
+        cbar.set_label('Average Occupied Timesteps')
         
         # Mark obstacles
         # Warehouse: 0 = Obstacle.
@@ -209,10 +212,12 @@ def main():
         aisles_mask[warehouse == -5] = 1
         plt.imshow(aisles_mask, cmap=ListedColormap(['lightgrey']), interpolation='nearest', alpha=1.0)
 
-        plt.title(f"Instance: {args.instance_type}, {ul_config}\nTotal Occupancy (All Seeds)")
-        plt.xlabel("Column x")
-        plt.ylabel("Row y")
-        
+        # Mark Sink (2) and Source (3)
+        source_sink_mask = np.zeros_like(warehouse, dtype=float)
+        source_sink_mask[:] = np.nan
+        source_sink_mask[(warehouse == 2) | (warehouse == 3)] = 1
+        plt.imshow(source_sink_mask, cmap=ListedColormap(['white']), interpolation='nearest', alpha=1.0)
+
         plt.tight_layout()
         save_path = os.path.join(output_dir, f"{ul_config}_heatmap.png")
         plt.savefig(save_path, bbox_inches='tight')
