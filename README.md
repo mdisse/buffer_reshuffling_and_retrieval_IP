@@ -8,8 +8,11 @@ This repository contains the Buffer Reshuffling and Retrieval (BRR) optimization
 # Run heuristic approach on a sample instance
 python run_heuristic_BRR.py --instance examples/Size_3x3_Layout_1x1.csv
 
-# Generate new instances
+# Generate new layouts
 python examples/layout_generator.py
+
+# Generate instances (Set the parameter in the for loop at the end of this script accordingly, then run)
+python run_BRR_experiment.py --generate-only
 
 # Validate solution quality
 python result_checker_BRR.py --solution_path experiments/resultsBRR/.../solution.json
@@ -34,7 +37,7 @@ The BRR system consists of several integrated components:
    - Source blocking prevention
    - Constraint violation handling
 
-3. **Instance Generation** (`examples/layout_generator.py`)
+3. **Layout Generation** (`examples/layout_generator.py`)
    - Automated test case generation
    - Configurable warehouse layouts
    - Unit load scheduling
