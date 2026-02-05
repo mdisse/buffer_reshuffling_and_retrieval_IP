@@ -12,7 +12,7 @@ class StaticModel:
         self.Unit_loads = self.instance.unit_loads
         self.T = self._calculate_max_T() + 1
         self.Lanes = self.instance.get_buffer().get_virtual_lanes()[1:]      # Exclude the source lane
-        for lane in self.Lanes[:-1]:    # revers tiers as model uses them differently than the unit load gen creates them
+        for lane in self.Lanes[:-1]:    # reverse tiers as model uses them differently than the unit load gen creates them
             lane.reverse_tiers()
 
         # Define variables

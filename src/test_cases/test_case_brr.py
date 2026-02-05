@@ -197,9 +197,6 @@ class TestCaseBrr:
         Get the travel time between two access points. We can not use the function of the model,
         as we only pass the decision variables to this class 
         """
-        # handling_time = tier1 * self.instance.get_handling_time() + tier2 * self.instance.get_handling_time()
-        # time = self.instance.get_buffer().ap_distance[int(ap1)][int(ap2)]/self.instance.get_vehicle_speed() + handling_time
-        # return int(max(1, self.instance.get_buffer().ap_distance[int(ap1)][int(ap2)]/self.instance.get_vehicle_speed()))
         if lane1 == 'source' or lane1 == 'sink':
             l1 = lane1
             t1 = None
@@ -223,7 +220,6 @@ class TestCaseBrr:
             if decision[1][1:] == decision[3][1:] and decision[2][1:] == decision[4][1:] and not verbose:
                 move = None
                 travel_time = 1
-            #continue    # Do not print the decision if the AMR does not move and verbose is False
             else:
                 move = f"[{decision[1][1:]}, {decision[2][1:]}] \u21AA [{decision[3][1:]}, {decision[4][1:]}]"
                 lane1 = decision[1][1:] 
@@ -273,8 +269,6 @@ class TestCaseBrr:
                 vehicle_decision_dict = {}
                 for k, v in self.model.get_solution_distances(solution).items():
                     decision, move, distance, travel_time = self._get_decision(k, v)
-                # for k, v in solution.items():
-                    # decision, move, distance, travel_time = self._get_decision(k, v)
                     if move is not None:
                         match = re.search(r"t(\d+)", decision)
                         time = match.group(1)
@@ -282,33 +276,11 @@ class TestCaseBrr:
                     timestep += travel_time
                 decision_dict[vehicle] = vehicle_decision_dict
             self.results['decisions'] = decision_dict
-                # self.results[f"vehicle_{k}"] = vehicle_dict
             save_resultsBrr(filename, self)
             print(f"Results saved to {filename}")
         
     def check_solution(self):
         self.sc.test_sol(self.sol)
-        # # For debugging infeasible solutions, uncomment the following lines to get IIS details
-        # print("Computing Irreducible Inconsistent Subsystem (IIS)...")
-        # self.model.model.computeIIS()
-        # self.model.model.write("model.lp")
-        
-        # print("\n--- IIS Report ---")
-        # print("The following constraints and bounds are part of the IIS (conflicting set):")
-        
-        # print("\nConstraints:")
-        # for c in self.model.model.getConstrs():
-            # if c.IISConstr:
-                # print(f"  {c.ConstrName}")
-                
-        # print("\nVariable Bounds:")
-        # for v in self.model.model.getVars():
-            # if v.IISLB:
-                # print(f"  Lower Bound: {v.VarName} >= {v.LB}")
-            # if v.IISUB:
-                # print(f"  Upper Bound: {v.VarName} <= {v.UB}")
-        # print("------------------\n")
-
         return self.sc.Status
 
     def set_task_queue(self, task_queue):

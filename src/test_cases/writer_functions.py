@@ -680,11 +680,6 @@ def validate_heuristic_solution_detailed(instance, test_case, verbose=False):
             for start_time_str, move_details in sorted_moves:
                 start_time = int(start_time_str)
                 
-                # Add idle moves for the gap before this move
-                # for t in range(current_time, start_time):
-                    # idle_decision = f"e_i{current_lane}_j{current_tier}_k{current_lane}_l{current_tier}_t{t}_v{vehicle_id}"
-                    # all_decision_values.append(idle_decision)
-                
                 # Add the actual move
                 all_decision_values.append(move_details['decision'])
                 

@@ -2,21 +2,6 @@ import numpy as np
 
 from collections import defaultdict
 
-def __dfs(start_node, neighbors, distance = None, parent = None):
-    """dfs, probably unnecessary for this application"""
-    if not distance:
-        distance = {start_node : 0}
-        parent = {start_node : None}
-        child_distance = 0
-    else:
-        child_distance = distance[start_node] + 1
-    for nbr in neighbors[start_node]:
-        if not nbr in parent or distance[nbr] > child_distance:
-            parent[nbr] = start_node
-            distance[nbr] = child_distance
-            __dfs(nbr, neighbors, distance, parent)
-    return distance, parent
-
 def __bfs(start_node, neighbors):
     """bfs, used to estimate all distances"""
     to_visit = [start_node]

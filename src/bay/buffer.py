@@ -133,7 +133,6 @@ class Buffer:
         access_points_by_bay = [[ap.get_global_yx() for ap in bay.access_points] for bay in baysAndSinksAndSources]
         all_access_points = []
         for ap_list in access_points_by_bay:
-            # Todo: Object needs to be added?
             # ap = AccessPoint() # global_x, global_y, stack_x: int, stack_y: int, direction: str
             all_access_points.extend(ap_list)
 

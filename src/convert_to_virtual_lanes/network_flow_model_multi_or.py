@@ -24,28 +24,19 @@ class SolutionPrinterNFM(cp_model.CpSolverSolutionCallback):
     def on_solution_callback(self):
 
         self._solution_count += 1
-        # print('Solution %i' % self._solution_count)
-
+        
         used_arc_dict = dict()
         for arc in self._used_arc:
             used_arc_dict[arc] = self.Value(self._used_arc[arc])
-        # print(used_arc_dict)
 
         flow_list_dict = dict()
         for flow in self._flow:
             flow_list_dict[flow] = self.Value(self._flow[flow])
-        # print(flow_list_dict)
 
         self._v_flow.append(flow_list_dict)
         self._v_used_arc.append(used_arc_dict)
 
-        # if self._solution_limit == 10:
-        # print('Solution %i' % self._solution_count)
-        # print(flow_list_dict)
-        # print(used_arc_dict)
-
         if self._solution_count >= self._solution_limit:
-            # print('Stop search after {} solutions for NFM solutions.'.format(self._solution_limit))
             self.StopSearch()
 
 
@@ -54,7 +45,6 @@ def get_position_last_misplaced(sequence_lane):
     counter1 = -1  # counter for tier level; Set 0 to get correctly placed
     counter2 = 0  # counter for stack number
     max_tier = sequence_lane.shape[1]  # maximum height of a stack
-    # print("tier_max", max_tier)
     value = 999  # import sys and sys.maxsize or float('inf')
     found = False  # Variable shows, if misplaced position has been found
     sequence_lane_flip = np.flip(sequence_lane, axis=0)
@@ -113,7 +103,6 @@ class NetworkFlowModelMultiOR():
         self.length = np.shape(bay.state)[1]
         self.tiers = np.shape(bay.state)[2]
         self.access = self.get_access_directions(bay.access_points)
-        # print(f'l{self.length} w{self.width} h{self.tiers}')
 
         # Network flow model
         self.m = cp_model.CpModel()
@@ -136,9 +125,7 @@ class NetworkFlowModelMultiOR():
     def get_access_directions(self, access_points):
         access_direction = [False, False, False, False]
         for a in access_points:
-            # print(a)
             if a.direction == "north":
-                # print(access_direction[0])
                 access_direction[0] = True
             if a.direction == "south":
                 access_direction[1] = True
@@ -146,7 +133,6 @@ class NetworkFlowModelMultiOR():
                 access_direction[2] = True
             if a.direction == "east":
                 access_direction[3] = True
-        # print(access_direction)
         return access_direction
 
     def get_solutions(self):
@@ -166,7 +152,6 @@ class NetworkFlowModelMultiOR():
 
                 solutions.append(virtual_lanes_output)
 
-        # print(virtual_lanes_output)
         return solutions, optimal_objective_value
 
     def derive_virtual_lanes(self, stack_indices, solution):
@@ -189,8 +174,6 @@ class NetworkFlowModelMultiOR():
             vl.ap_id = new_ap_id
             # Get ap_id via stack_x and stack_y
             virtual_lanes_list.append(vl)
-        # for x in virtual_lanes_list:
-        #     print(f'stakcks {x.stacks},ap_id {x.ap_id}')
         return virtual_lanes_list  # np.array(bay_state, dtype="object")  # , None , bay_state
 
     # objs = [MyClass() for i in range(10)]
@@ -217,7 +200,7 @@ class NetworkFlowModelMultiOR():
         lanes = []
         visited_stacks = []  # prevent loops
         for index, lane in enumerate(directions_edges):
-            lanes.append([int(lane[1][1:])])  # entry stack; Debug point: index == 33
+            lanes.append([int(lane[1][1:])])  # entry stack
             visited_stacks.append(lane[1])
             previous = lane[1]
             while previous is not None:
@@ -227,7 +210,6 @@ class NetworkFlowModelMultiOR():
                                             int(stacks[previous][1:])]  # both successor stacks
                         difference = int(lanes[index][0]) - int(
                             lanes[index][1])  # Get difference to see if successor has a bigger or smaller ID
-                        # print(difference)
                         if difference > 0:
                             stack_id = min(successor_stacks)
                         else:
@@ -263,7 +245,6 @@ class NetworkFlowModelMultiOR():
         directions_edges_stack_ids = []
         for edge in directions_edges:
             directions_edges_stack_ids.append(int(edge[1][1:]))
-        # print("directions_edges_stack_ids", directions_edges_stack_ids)
         unvisited_directions_edges_stack_ids = []
         for edge in self.cost:
             if edge[0] == "north" or edge[0] == "south" or edge[0] == "west" or edge[0] == "east":
@@ -281,20 +262,15 @@ class NetworkFlowModelMultiOR():
                 else:
                     additional_lanes.append([stack_id])
         new_lanes.extend(additional_lanes)
-        # print(new_lanes)
         return new_lanes
 
     def run_model(self):
         # Creates the solver and solve.
         solver = cp_model.CpSolver()
         solver.parameters.num_search_workers = 1
-        # solver.parameters.linearization_level = 0
-        # solver.parameters.max_time_in_seconds = 999999
         solver.parameters.enumerate_all_solutions = True
 
         solver.Solve(self.m, self.solution_printer)
-
-        # self.m.ExportToFile('model.pb.txt')
 
         self.n_solutions = self.solution_printer._solution_count
 
@@ -321,8 +297,6 @@ class NetworkFlowModelMultiOR():
             self.m.Minimize(sum(objective_terms))
             self.solution_printer = SolutionPrinterNFM(self.m.v_flow, self.m.v_used_arc, solution_limit=9999)
         else:
-            # self.m.Minimize(sum(objective_terms))
-            # print("New Constraint")
             self.m.Add(
                 sum(self.m.v_used_arc[(arc[0], arc[1])] * int(self.cost[arc] * 10000) for arc in self.arcs) <= int(
                     round(optimal_objective_value * 10000)))
@@ -613,7 +587,6 @@ class NetworkFlowModelMultiOR():
         product_flow = pd.DataFrame(columns=["From", "To", "Flow"])
         pd.set_option('display.max_rows', None)  # To see all lines
         for arc in self.arcs:
-            # if flow[arc].x > 1e-6:
             product_flow = product_flow.append(
                 {"From": arc[0], "To": arc[1], "Flow": self.v_flow[arc].x, "Used Arc": self.v_used_arc[arc].x},
                 ignore_index=True)
@@ -624,10 +597,7 @@ class NetworkFlowModelMultiOR():
     def generate_graph(self):
         # Generate visualization via networkX
         G = nx.DiGraph()
-        # G.clear()
-        # Simple Graph without position
-        # for k in all_nodes:
-        #     G.add_node(k)
+
         # Grid-graph: Calculate position for each node
         x = 0
         start = 0
@@ -642,8 +612,7 @@ class NetworkFlowModelMultiOR():
         start += self.length
         x -= 10  # Remove added parameter of last loop
         y += 10  # Remove added parameter of last loop
-        # Add origin node to graph
-        # G.add_node("o", pos=(-20, y / 4))
+
         # Add directions node
         if self.access[0]:
             G.add_node("north", pos=(x / 2, 10))
@@ -664,12 +633,11 @@ class NetworkFlowModelMultiOR():
                 0] != "o":  # Show only used arcs
                 label_gen[edge[0], edge[1]] = "{}|{}".format(int(self.v_flow[edge].x), int(self.cost[edge[0], edge[1]]))
                 G.add_edge(edge[0], edge[
-                    1])  # , weight=cost[edge[0], edge[1]])  # flow[edge].x)  # weight_graph)  # cost[x[0], x[1]])
+                    1])
+
         # Default spring layout instead of grid
-        # pos = nx.spring_layout(G)
         pos = nx.get_node_attributes(G, 'pos')
         nx.draw(G, pos, with_labels=True, font_weight='bold')
-        # labels = nx.get_edge_attributes(G, 'weight')
         labels = label_gen
         nx.draw_networkx_edge_labels(G, pos, edge_labels=labels)
         number_int = 1

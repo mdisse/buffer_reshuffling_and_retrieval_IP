@@ -13,7 +13,7 @@ class DynamicMultipleModel:
         
         # ONLY disable optimization when check_mode=True (for heuristic validation)
         # Regular solve mode still uses all optimization parameters
-        if False:
+        if self.check_mode:
             # For check mode: disable presolve and limit iterations for fast feasibility check only
             self.model.setParam('Presolve', 0)  # Disable presolve
             self.model.setParam('TimeLimit', 10)  # Very short time limit
@@ -23,9 +23,7 @@ class DynamicMultipleModel:
         else:
             # Normal optimization mode (for run_BRR_experiment.py)
             self.model.setParam('TimeLimit', 3600)
-            # self.model.setParam('Threads', 20)
             self.model.setParam('MIPGap', 0.05)
-            # self.model.setParam('SolutionLimit', 1)
             self.model.setParam('Heuristics', 0.5)
             self.model.setParam('BarHomogeneous', 1)
             self.model.setParam('MIPFocus', 1)
@@ -164,8 +162,6 @@ class DynamicMultipleModel:
 
         # Set the objective function to the model
         self.model.setObjective(obj, gp.GRB.MINIMIZE)
-        # if self.verbose: 
-        #     print(f"Objective: {obj}")
 
         
 

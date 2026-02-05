@@ -1,16 +1,13 @@
 class AutonomousMobileRobot(object):
     '''
     Abstract class for mobile AMRs.
-
-    Parameters:
-#       last moves
     '''
 
     def __init__(self, id=None):
         self._last_moves = []
         self.id = id
 
-    def get_executet_moves(self):
+    def get_executed_moves(self):
         return len(self._last_moves)
 
     def get_AMR_move_history(self):

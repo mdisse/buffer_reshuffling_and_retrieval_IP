@@ -12,7 +12,6 @@ def get_position_last_misplaced(sequence_lane):
     counter1 = -1  # counter for tier level; Set 0 to get correctly placed
     counter2 = 0  # counter for stack number
     max_tier = sequence_lane.shape[1]  # maximum height of a stack
-    # print("tier_max", max_tier)
     value = 999  # import sys and sys.maxsize or float('inf')
     found = False  # Variable shows, if misplaced position has been found
     sequence_lane_flip = np.flip(sequence_lane, axis=0)
@@ -90,9 +89,7 @@ class NetworkFlowModel():
     def get_access_directions(self, access_points):
         access_direction = [False, False, False, False]
         for a in access_points:
-            # print(a)
             if a.direction == "north":
-                # print(access_direction[0])
                 access_direction[0] = True
             if a.direction == "south":
                 access_direction[1] = True
@@ -100,14 +97,12 @@ class NetworkFlowModel():
                 access_direction[2] = True
             if a.direction == "east":
                 access_direction[3] = True
-        # print(access_direction)
         return access_direction
 
     def get_virtual_lanes(self):
         self.run_model()
         stack_indices = self.get_stack_indices_for_each_lane()
         virtual_lanes_output = self.derive_virtual_lanes(stack_indices)
-        # print(virtual_lanes_output)
         return virtual_lanes_output
 
 
@@ -131,7 +126,7 @@ class NetworkFlowModel():
             vl.ap_id = new_ap_id
             # Get ap_id via stack_x and stack_y
             virtual_lanes_list.append(vl)
-        return virtual_lanes_list  # np.array(bay_state, dtype="object")  # , None , bay_state
+        return virtual_lanes_list
 
 
     def get_stack_indices_for_each_lane(self):
@@ -152,7 +147,7 @@ class NetworkFlowModel():
         lanes = []
         visited_stacks = []  # prevent loops
         for index, lane in enumerate(directions_edges):
-            lanes.append([int(lane[1][1:])])  # entry stack; Debug point: index == 33
+            lanes.append([int(lane[1][1:])])  # entry stack
             visited_stacks.append(lane[1])
             previous = lane[1]
             while previous is not None:
@@ -162,7 +157,6 @@ class NetworkFlowModel():
                                             int(stacks[previous][1:])]  # both successor stacks
                         difference = int(lanes[index][0]) - int(
                             lanes[index][1])  # Get difference to see if successor has a bigger or smaller ID
-                        # print(difference)
                         if difference > 0:
                             stack_id = min(successor_stacks)
                         else:
@@ -198,7 +192,6 @@ class NetworkFlowModel():
         directions_edges_stack_ids = []
         for edge in directions_edges:
             directions_edges_stack_ids.append(int(edge[1][1:]))
-        # print("directions_edges_stack_ids", directions_edges_stack_ids)
         unvisited_directions_edges_stack_ids = []
         for edge in self.cost:
             if edge[0] == "north" or edge[0] == "south" or edge[0] == "west" or edge[0] == "east":
@@ -530,7 +523,6 @@ class NetworkFlowModel():
         product_flow = pd.DataFrame(columns=["From", "To", "Flow"])
         pd.set_option('display.max_rows', None)  # To see all lines
         for arc in self.arcs:
-            # if flow[arc].x > 1e-6:
             product_flow = product_flow.append(
                 {"From": arc[0], "To": arc[1], "Flow": self.v_flow[arc].x, "Used Arc": self.v_used_arc[arc].x},
                 ignore_index=True)
@@ -541,10 +533,7 @@ class NetworkFlowModel():
     def generate_graph(self):
         # Generate visualization via networkX
         G = nx.DiGraph()
-        # G.clear()
-        # Simple Graph without position
-        # for k in all_nodes:
-        #     G.add_node(k)
+
         # Grid-graph: Calculate position for each node
         x = 0
         start = 0
@@ -559,8 +548,7 @@ class NetworkFlowModel():
         start += self.length
         x -= 10  # Remove added parameter of last loop
         y += 10  # Remove added parameter of last loop
-        # Add origin node to graph
-        # G.add_node("o", pos=(-20, y / 4))
+
         # Add directions node
         if self.access[0]:
             G.add_node("north", pos=(x / 2, 10))
@@ -581,12 +569,11 @@ class NetworkFlowModel():
                 0] != "o":  # Show only used arcs
                 label_gen[edge[0], edge[1]] = "{}|{}".format(int(self.v_flow[edge].x), int(self.cost[edge[0], edge[1]]))
                 G.add_edge(edge[0], edge[
-                    1])  # , weight=cost[edge[0], edge[1]])  # flow[edge].x)  # weight_graph)  # cost[x[0], x[1]])
+                    1])
+
         # Default spring layout instead of grid
-        # pos = nx.spring_layout(G)
         pos = nx.get_node_attributes(G, 'pos')
         nx.draw(G, pos, with_labels=True, font_weight='bold')
-        # labels = nx.get_edge_attributes(G, 'weight')
         labels = label_gen
         nx.draw_networkx_edge_labels(G, pos, edge_labels=labels)
         number_int = 1

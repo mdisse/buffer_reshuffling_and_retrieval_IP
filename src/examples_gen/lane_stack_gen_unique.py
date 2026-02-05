@@ -42,7 +42,6 @@ class LanedStackGenUnique:
             n = len(lane) * bay.height
             priorities = [next(self.priorities_generator) for _ in range(n)]
             priorities = [p for p in priorities if p]
-            print(priorities)
             k = len(priorities)
             self.__populate_lane(bay, lane, k, priorities)
                 
@@ -71,7 +70,6 @@ class LanedStackGenUnique:
             lanes_list.append(lanes)
             self.__generate_stacks(bay, lanes)
 
-        # return unit load objects if available
         return []
 
 if __name__ == '__main__': 

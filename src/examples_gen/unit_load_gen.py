@@ -86,8 +86,6 @@ class UnitLoadGenerator:
             unit_loads = [next(self.ul_generator) for _ in range(n)]
             unit_loads = [ul for ul in unit_loads if ul]    # nice hack 
             ul_stored = [ul for ul in unit_loads if ul.stored]
-            # k = len(unit_loads)
-            # self.__populate_lane(bay, lane, k, unit_loads)
             k = len(ul_stored)
             self.__populate_lane(bay, lane, k, ul_stored)
 
@@ -103,7 +101,6 @@ class UnitLoadGenerator:
 
 
     def generate_bays_priorities(self, bays: list, height: int = 1, source=True):
-        # return self.prio_mock(bays, height)
         """Generates random lanes and populates them with stacks"""
         self.slots = sum([bay.state.size*height for bay in bays])
         self.ul_generator = self.__generate_unit_loads(source)
@@ -119,32 +116,6 @@ class UnitLoadGenerator:
 
         return self.unit_loads
     
-    # def prio_mock(self, bays, height): 
-    #     # just for testing
-    #     for bay in bays: 
-    #         bay.height = height
-    #         bay.state = np.array([[[0], [0], [6]], [[0], [0], [5]], [[0], [1], [2]]])
-    #         # bay.state = np.array([[[0]], [[1]], [[0]]])
-    #     unit_loads = []
-    #     unit_loads_dic = [
-    #         {"id": 1, "retrieval_start": 30, "retrieval_end": 40, "arrival_start": None, "arrival_end": None},
-    #         {"id": 2, "retrieval_start": 2, "retrieval_end": 25, "arrival_start": None, "arrival_end": None},
-    #         {"id": 3, "retrieval_start": 30, "retrieval_end": 32, "arrival_start": 10, "arrival_end": 15},
-    #         {"id": 4, "retrieval_start": 30, "retrieval_end": 32, "arrival_start": 20, "arrival_end": 25},
-    #         # {"id": 4, "retrieval_start": 100, "retrieval_end": 120, "arrival_start": None, "arrival_end": None},
-    #         # {"id": 5, "retrieval_start": 20, "retrieval_end": 40, "arrival_start": None, "arrival_end": None},
-    #         # {"id": 6, "retrieval_start": 50, "retrieval_end": 100, "arrival_start": None, "arrival_end": None},
-    #         # {"id": 7, "retrieval_start": 10, "retrieval_end": 40, "arrival_start": None, "arrival_end": None},
-    #         # {"id": 8, "retrieval_start": 120, "retrieval_end": 160, "arrival_start": 70, "arrival_end": 80},
-    #         # {"id": 9, "retrieval_start": 140, "retrieval_end": 160, "arrival_start": 25, "arrival_end": 35},
-    #         # {"id": 10, "retrieval_start": 110, "retrieval_end": 160, "arrival_start": 100, "arrival_end": 105},
-    #     ]
-    #     for ul in unit_loads_dic: 
-    #         unit_loads.append(UnitLoad(ul["id"], ul["retrieval_start"], ul["retrieval_end"], ul["arrival_start"], ul["arrival_end"]))
-
-    #     return unit_loads
-
-
         
 
 if __name__ == '__main__': 

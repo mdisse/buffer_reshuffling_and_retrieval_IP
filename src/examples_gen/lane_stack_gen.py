@@ -49,7 +49,6 @@ class LanedStackGen:
     def __add_load(self, bay: AccessBay, lanes : list):
         """Adds a random load to a random lane"""
         lane_index = self.rng.integers(0, len(lanes))
-        # lane = self.rng.choice(lanes)
         lane = lanes[lane_index]
 
         for i in range(len(lane) - 1, -1, -1):
@@ -63,7 +62,6 @@ class LanedStackGen:
     def __rm_load(self, bay: AccessBay, lanes : list):
         """Removes a random load from a random lane"""
         lane_index = self.rng.integers(0, len(lanes))
-        # lane = self.rng.choice(lanes)
         lane = lanes[lane_index]
 
         for point in lane:
@@ -108,7 +106,6 @@ class LanedStackGen:
                 self.__rm_load(bay, lanes)
                 n_loads += np.count_nonzero(bay.state)
 
-        # return unit load objects if available
         return []
 
 if __name__ == '__main__': 

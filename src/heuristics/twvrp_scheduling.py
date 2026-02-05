@@ -21,7 +21,6 @@ from ortools.sat.python import cp_model
 
 from src.bay import tier
 
-# [NEW] Change 1: Import the collision repairer and traceback
 from .vrp_collision_repair import VRPCollisionRepairer
 import traceback
 

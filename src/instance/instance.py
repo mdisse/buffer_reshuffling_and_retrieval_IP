@@ -40,7 +40,6 @@ class Instance():
                  as_max=None,
                  time_window_length=None,
                  ): 
-        # try: 
         if instanceLoader is not None: 
             self.layout_file = instanceLoader.get_layout_filename()
             self.instance_path = instanceLoader.get_instance_path()
@@ -100,12 +99,6 @@ class Instance():
             self._check_feasibility_for_sources()
         if len(self.unit_loads) > 0:
             self._check_feasibility_for_unit_loads()
-
-
-        # except TypeError as e: 
-        #     print("Error: Make sure that you fully describe the instance by either using the instanceLoader \n or setting all of the other parameters when creating an object of the instance class.")
-        #     print(e)
-        #     sys.exit(1)
 
     def __str__(self): 
         return str({

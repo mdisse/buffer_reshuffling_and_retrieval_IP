@@ -18,7 +18,6 @@ def ul_in_yard_dm(m):
             m.model.addConstr(
                 gp.quicksum(m.b_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t)] for i in m.Lanes[1:-1] for j in i.get_tiers()) <= m.s_vars[(n.get_id(), t)],
                 name=constr_name)
-            # print(f"{[m.b_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t)] for i in m.Lanes[1:-1] for j in i.get_tiers()]} + {m.g_vars[(n.get_id(), t)]} = {m.s_vars[(n.get_id(), t)]}")
 
 def ul_in_yard2_dm(m):
     # for every unit load and in every time step the g var is greater equal than the s var - sum of b vars
@@ -68,7 +67,6 @@ def no_hollow_spaces_dm(m):
                 m.model.addConstr(gp.quicksum(m.b_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t)] for n in m.Unit_loads) >= 
                                   gp.quicksum(m.b_vars[(i.get_ap_id(), j.get_id()+1, n.get_id(), t)] for n in m.Unit_loads),
                                   name=constr_name)
-                # print(f"{[m.b_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t)] for n in m.Unit_loads]} >= {[m.b_vars[(i.get_ap_id(), j.get_id()+1, n.get_id(), t)] for n in m.Unit_loads]}")
 
 def one_move_per_vehicle(m):
     # limits each time step to a single retrieval or relocation for each available vehicle at that position
@@ -131,7 +129,6 @@ def one_move_per_vehicle_source_dm(m):
                 gp.quicksum(m.e_vars[(source.get_ap_id(), s_tier.get_id(), k.get_ap_id(), l.get_id(), t, v.get_id())] for k in m.Lanes for l in k.get_tiers()) <=
                 m.c_vars[(source.get_ap_id(), s_tier.get_id(), t, v.get_id())],
                 name=constr_name)
-            # print(f"{m.c_vars[(source.get_ap_id(), s_tier.get_id(), t, v.get_id())]} = {[m.z_vars[(i.get_ap_id(), j.get_id(), n.get_id(), t, v.get_id())] for i in m.Lanes[1:-1] for j in i.get_tiers() for n in m.Unit_loads]}")
 
 def direct_retrieval_if_not_stored_dm(m): 
     # ensures that a unit load can only be directly retrieved if it is not stored
@@ -421,7 +418,6 @@ def vehicle_update_sink_dm(m):
                 repositionings_from_sink,
                 name = constr_name
             )
-            # print(f"{m.c_vars[I.get_ap_id(), 1, t, v.get_id()]} = {retrievals} + {repositions_into_sink} - {repositionings_from_sink}")
 
 def vehicle_update_source_dm(m):
     # ensures that the vehicle is updated after every move to the source
@@ -462,7 +458,6 @@ def vehicle_update_source_dm(m):
                 direct_retrievals,
                 name = constr_name
             )
-            # print(f"{m.c_vars[source.get_ap_id(), source.get_tiers()[0].get_id(), t, v.get_id()]} = - {storages} + {repositions_into_source} - {repositions_from_source}")
 
 
 def relations_retrieval_config_vars(m):
@@ -507,7 +502,6 @@ def relations_storage_config_vars_dm(m):
                                 for v in m.Vehicles:
                                     relations_storage_constraint += m.z_vars[i.get_ap_id(), j.get_id(), n.get_id(), t_bar, v.get_id()]
                 m.model.addConstr(m.s_vars[n.get_id(), t] == m.s_vars[n.get_id(), 1] + relations_storage_constraint, name=constr_name)
-                # print(f"{m.s_vars[n.get_id(), t]} = {relations_storage_constraint}")
                                 
 
 def retrieval_after_arrival(m):
@@ -592,7 +586,6 @@ def stack_after_arrival_dm(m):
                             if t >= 1:
                                 m.model.addConstr(m.z_vars[i.get_ap_id(), j.get_id(), n.get_id(), t, v.get_id()] == 0,
                                                 name=f"stack_after_arrival_ul{n.get_id()}_{i.get_ap_id()}_{j.get_id()}_{t}_vehicle{v.get_id()}")
-                                # print(f"{m.z_vars[i.get_ap_id(), j.get_id(), n.get_id(), t, v.get_id()]} == 0")
 
 def stack_in_window_dm(m):
     # Unit loads can only be stacked within the stacking window, considering travel time
@@ -613,9 +606,8 @@ def stack_in_window_dm(m):
                     for v in m.Vehicles:
                         window_constraint += m.y_vars[source.get_ap_id(), 1, n.get_id(), t, v.get_id()]
             m.model.addConstr(window_constraint == 1, name=f"stack_in_window_ul{n.get_id()}")
-            # print(f"{window_constraint} == 1")
 
-def stack_before_deadline_dm(m): 
+def stack_before_deadline_dm(m):
     # Unit loads can only be stacked before the deadline, considering travel time 
     for n in m.Unit_loads:
         if n.stored is False: 

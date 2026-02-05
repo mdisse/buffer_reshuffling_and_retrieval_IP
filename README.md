@@ -160,6 +160,11 @@ This repository provides two complementary visualization scripts plus automatic 
    - Works specifically with heuristic results containing A* data
    - Shows the logical sequence of warehouse operations
 
+3. **Heatmap Analysis Tools**
+   - **`visualize_slot_heatmap.py`**: Visualizes average slot occupancy duration.
+   - **`visualize_slot_heatmap_aisles.py`**: Visualizes combined occupancy and vehicle travel time in aisles.
+   - **`visualize_ap_usage.py`**: Visualizes Access Point usage frequency using color-coded circles.
+
 #### Automatic Visualization System
 
 The `src.visualization.auto_visualize` module provides automatic, multiprocessing-enabled visualization:
@@ -197,6 +202,23 @@ python visualize_astar_moves.py --file <heuristic_result_file.json>
 
 # Without virtual lane coloring
 python visualize_astar_moves.py --file <heuristic_result_file.json> --no-color
+```
+
+#### Heatmap Utilization Analysis
+These scripts generate analytical heatmaps in the `heatmaps/` directory.
+
+```bash
+# Analyze slot occupancy duration (average over an instance type)
+python visualize_slot_heatmap.py --instance-type manual2
+
+# Analyze combined aisle travel and slot occupancy
+python visualize_slot_heatmap_aisles.py --instance-type manual2
+
+# Analyze Access Point usage frequency
+python visualize_ap_usage.py --instance-type manual2
+
+# Analyze a single specific result file
+python visualize_slot_heatmap.py --file <path_to_result_file.json>
 ```
 
 ## 🔄 Complete Workflow
@@ -335,7 +357,8 @@ The system is designed for extensibility:
 
 ## 📄 License
 
-[Add your license information here]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
 
 ---
 

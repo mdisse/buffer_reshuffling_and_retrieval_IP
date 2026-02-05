@@ -635,7 +635,6 @@ class HeuristicCalculator:
             return 0.0
         
         # Fleet-size-dependent blocking multiplier: 10 / fleet_size
-        # BLOCKING_MULTIPLIER = 5.0 / self.fleet_size
         BLOCKING_MULTIPLIER = 5.0 
         
         total_cost = 0.0
@@ -1323,9 +1322,6 @@ class MoveGenerator:
         sim_buffer_state = current_node.buffer_state
         # Use cached empty slots
         empty_slots = current_node.empty_slots
-        
-        # if self.config.verbose:
-        #     print(f"DEBUG: Empty slots found: {len(empty_slots)}")
             
         tabu_slots = current_node.tabu_list
         

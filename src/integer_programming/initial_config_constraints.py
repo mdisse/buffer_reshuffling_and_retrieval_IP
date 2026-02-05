@@ -25,7 +25,6 @@ def unit_load_start_dm(m):
     t = 1
     for n in m.Unit_loads:
         constr_name2 = f"unit_load_stored_time{t}_ul{n.get_id()}"
-        # print(f"{n}, {n.stored}")
         if n.stored is True: 
             m.model.addConstr(m.s_vars[n.get_id(), t] == 1, name=constr_name2)
         else: 

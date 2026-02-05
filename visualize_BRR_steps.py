@@ -320,7 +320,6 @@ def process_file(file):
                     plt.text(col + 0.5, row + 0.5, f"{(row, col)}", color='black', ha='center', va='center')
                 cell_color = get_color(row, col)
                 plt.gca().add_patch(plt.Rectangle((col, row), 1, 1, color=cell_color))
-                # Removed initial UL drawing logic from here
 
 
         # Bay borders
