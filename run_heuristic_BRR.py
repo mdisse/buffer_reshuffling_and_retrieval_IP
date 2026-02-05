@@ -10,7 +10,8 @@ import numpy as np
 from src.instance.instance_loader import InstanceLoader
 from src.instance.instance import Instance
 from src.test_cases.test_case_brr import TestCaseBrr
-from src.util.map_tw_prio import create_task_queue 
+from src.test_cases.writer_functions import generate_heuristic_result_path
+from src.heuristics.map_tw_prio import create_task_queue 
 from src.visualization.auto_visualize import auto_visualize 
 
 def find_solved_gurobi_instances(experiments_dir="experiments"):
@@ -75,10 +76,30 @@ def find_instances_without_heuristic_results(experiments_dir="experiments"):
     return instances_needing_heuristic
 
 
-def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=None, astar_time_limit=None, vrp_time_limit=None, enable_visualization=True, vrp_solver='scheduling'): 
+def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=None, astar_time_limit=None, vrp_time_limit=None, enable_visualization=True, vrp_solver='scheduling', overwrite=False, **kwargs): 
     """
     Solve the given instance using the BRR heuristic with optional comparison.
     """
+    # Check if result checks existence (if overwrite is False)
+    if not overwrite:
+        try:
+            fleet_size = instance.get_fleet_size()
+            result_path = generate_heuristic_result_path(instance_file_path, fleet_size)
+            if os.path.exists(result_path):
+                msg = f"Skipping {os.path.basename(instance_file_path)} (result exists)"
+                if verbose:
+                    print(msg + f": {result_path}")
+                else:
+                    print(msg)
+                
+                return {
+                    'instance': os.path.basename(instance_file_path),
+                    'heuristic_feasible': False,
+                    'skipped': True
+                }
+        except Exception as e:
+            if verbose: print(f"Warning: Could not check for existing result: {e}")
+
     result = solve_with_comparison(instance, instance_file_path, verbose, gurobi_result_path, astar_time_limit, vrp_time_limit, vrp_solver)
     test_case = result['test_case']
 
@@ -110,15 +131,49 @@ def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=Non
     
     # Calculate MIP gap BEFORE saving so it can be stored in the file
     if gurobi_result and gurobi_result.get('feasible'):
-        gurobi_mipgap = gurobi_result.get('gurobi_mipgap', None)
-        test_case.compare_with_gurobi(gurobi_result['objective'], gurobi_mipgap)
+        gurobi_obj = gurobi_result['objective']
+        heuristic_obj = test_case.heuristic_objective
+        
+        if gurobi_obj > 0 and heuristic_obj is not None:
+             # Calculate gap as percentage
+             gap = ((heuristic_obj - gurobi_obj) / gurobi_obj) * 100
+             test_case.mip_gap = gap
+             if verbose:
+                 print(f"  Calculated comparison MIP gap before validation: {test_case.mip_gap:.2f}%")
+
+    # If validate_gap is requested (default True), run Gurobi to calculate the true MIP gap against lower bound
+    # This will overwrite the comparison gap if it was calculated above, which is what we want
+    # (True MIP gap is more accurate than gap vs potentially suboptimal Gurobi solution)
+    if kwargs.get('validate_gap', True):
         if verbose:
-            print(f"  Calculated MIP gap before saving: {test_case.mip_gap:.2f}%")
-
-
+            print("  Running Gurobi to validate solution and calculate true MIP gap...")
+        
+        if hasattr(test_case, 'calculate_gurobi_gap'):
+            # Extract the solution from the heuristic test case
+            from src.test_cases.writer_functions import translate_heuristic_decisions_simple
+            translated_decisions = translate_heuristic_decisions_simple(test_case.amr_assignments, test_case.instance)
+            
+            solution = {}
+            for vehicle_decisions in translated_decisions.values():
+                for decision_info in vehicle_decisions.values():
+                    if 'decision' in decision_info:
+                        solution[decision_info['decision']] = 1
+            
+            # Create validation instance
+            val_test_case = TestCaseBrr(instance=instance, variant="dynamic_multiple", solution=solution, verbose=verbose, mode="validate_gap")
+            
+            # Calculate gap
+            true_gap = val_test_case.calculate_gurobi_gap()
+            
+            if true_gap is not None:
+                # Update the original test case's mip_gap so it gets saved
+                test_case.mip_gap = true_gap * 100
+                if verbose:
+                    print(f"  True MIP Gap calculated: {test_case.mip_gap:.2f}%")
 
     # Save heuristic results, which includes running validation
-    result_file_path = test_case.save_heuristic_results(instance_file_path, fleet_size)
+    validate_results = kwargs.get('validate_gap', True)
+    result_file_path = test_case.save_heuristic_results(instance_file_path, fleet_size, validate=validate_results)
 
     # Auto-generate visualization in background
     if enable_visualization:
@@ -134,6 +189,10 @@ def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=Non
 
     # Read validation results from the saved file
     validation_results = get_validation_results_from_file(instance_file_path, fleet_size)
+    if verbose:
+        print(f"DEBUG: validation_results type: {type(validation_results)}")
+        if validation_results:
+            print(f"DEBUG: is_feasible: {validation_results.get('is_feasible')}")
     
     # Now update result dict with comparison data for output
     if gurobi_result and gurobi_result.get('feasible'):
@@ -145,8 +204,10 @@ def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=Non
             validation_gap = validation_results.get('validation_mipgap', None)
             if verbose:
                 print(f"  Using validation results for comparison: obj={validation_obj}, gap={validation_gap}")
-            # Re-compare with validation objective for display purposes
-            mip_gap = test_case.compare_with_gurobi(validation_obj, validation_gap)
+            
+            # Use validation gap directly
+            mip_gap = validation_gap * 100 if validation_gap is not None else 0.0
+            
             result.update({
                 'gurobi_obj': validation_obj,
                 'gurobi_time': gurobi_result['runtime'],
@@ -156,9 +217,31 @@ def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=Non
                 'has_comparison': True,
                 'used_validation': True
             })
+        elif validation_results and not validation_results.get('is_feasible', True):
+            # If validation failed, set MIP gap to NaN
+            if verbose:
+                print("  Validation failed (infeasible), setting MIP gap to NaN")
+            
+            mip_gap = float('nan')
+            
+            result.update({
+                'gurobi_obj': gurobi_result['objective'],
+                'gurobi_time': gurobi_result['runtime'],
+                'gurobi_mipgap': gurobi_result.get('gurobi_mipgap', 'N/A'),
+                'mip_gap': mip_gap,
+                'speedup': gurobi_result['runtime'] / test_case.heuristic_runtime if test_case.heuristic_runtime > 0 else 0,
+                'has_comparison': True,
+                'used_validation': True
+            })
         else:
-            # Use stored Gurobi result - mip_gap already calculated above
-            mip_gap = test_case.mip_gap if hasattr(test_case, 'mip_gap') else 0.0
+            # Use stored Gurobi result
+            heuristic_obj = test_case.heuristic_objective
+            gurobi_obj = gurobi_result['objective']
+            if gurobi_obj > 0:
+                 mip_gap = ((heuristic_obj - gurobi_obj) / gurobi_obj) * 100
+            else:
+                 mip_gap = float('inf')
+
             speedup = gurobi_result['runtime'] / test_case.heuristic_runtime if test_case.heuristic_runtime > 0 else 0
             
             result.update({
@@ -172,22 +255,6 @@ def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=Non
             })
     else:
         result['has_comparison'] = False
-
-
-    # Auto-generate visualization in background
-    if enable_visualization:
-        try:
-            viz_process = auto_visualize(result_file_path, background=True, overwrite=True)
-            if verbose and viz_process:
-                print(f"🎨 Started background visualization for {os.path.basename(result_file_path)}")
-        except Exception as e:
-            if verbose:
-                print(f"⚠️  Could not start visualization: {e}")
-    elif verbose:
-        print("📊 Automatic visualization disabled")
-
-    # Read validation results from the saved file
-    validation_results = get_validation_results_from_file(instance_file_path, fleet_size)
 
     # Print results
     if verbose:
@@ -346,21 +413,42 @@ def solve_instance(instance, verbose, instance_file_path, gurobi_result_path=Non
     return result
 
 
-def solve_all_missing_heuristic_instances(experiments_dir="experiments", verbose=False, astar_time_limit=None, vrp_time_limit=None, enable_visualization=True, vrp_solver='scheduling'):
+def solve_all_missing_heuristic_instances(experiments_dir="experiments", verbose=False, astar_time_limit=None, vrp_time_limit=None, enable_visualization=True, vrp_solver='scheduling', validate_gap=True, overwrite=False):
     """
     Find all solved Gurobi instances that don't have heuristic results and solve them.
     """
     print(f"Searching for solved instances in {experiments_dir}...")
-    instances_needing_heuristic = find_instances_without_heuristic_results(experiments_dir)
+    
+    if overwrite:
+         # Find ALL solved instances, disregarding whether heuristic result exists
+         solved_instances = find_solved_gurobi_instances(experiments_dir)
+         instances_needing_heuristic = []
+         
+         for instance_file, result_file in solved_instances:
+            # Extract fleet size from result path
+            fleet_size = 1
+            if 'fleet_size_' in result_file:
+                try:
+                    fleet_size = int(result_file.split('fleet_size_')[1].split('/')[0])
+                except:
+                    fleet_size = 1
+            
+            instances_needing_heuristic.append((instance_file, fleet_size))
+            
+         if verbose:
+             print(f"Overwrite enabled: Processing all {len(instances_needing_heuristic)} found Gurobi instances.")
+    else:
+         instances_needing_heuristic = find_instances_without_heuristic_results(experiments_dir)
     
     if not instances_needing_heuristic:
         print("No instances found that need heuristic solving.")
         return
     
-    print(f"Found {len(instances_needing_heuristic)} instances that need heuristic solving.")
+    print(f"Found {len(instances_needing_heuristic)} instances to process.")
     
     successful_solves = 0
     failed_solves = 0
+    skipped_solves = 0
     
     for i, (instance_file, fleet_size) in enumerate(instances_needing_heuristic, 1):
         print(f"\n--- Processing instance {i}/{len(instances_needing_heuristic)}: {os.path.basename(instance_file)} (fleet_size={fleet_size}) ---")
@@ -376,8 +464,12 @@ def solve_all_missing_heuristic_instances(experiments_dir="experiments", verbose
             if verbose:
                 print(f"   Fleet size set to: {fleet_size}")
             
-            result = solve_instance(instance, verbose, instance_file, None, astar_time_limit, vrp_time_limit, enable_visualization, vrp_solver)
+            result = solve_instance(instance, verbose, instance_file, None, astar_time_limit, vrp_time_limit, enable_visualization, vrp_solver, validate_gap=validate_gap, overwrite=overwrite)
             
+            if result.get('skipped'):
+                skipped_solves += 1
+                continue
+
             # Check if we have a valid solution (both A* and VRP succeeded)
             if result and result.get('heuristic_feasible'):
                 # Check validation from the file that was just written
@@ -419,8 +511,11 @@ def solve_all_missing_heuristic_instances(experiments_dir="experiments", verbose
     print(f"\n=== BATCH PROCESSING SUMMARY ===")
     print(f"Total instances processed: {len(instances_needing_heuristic)}")
     print(f"Successfully solved: {successful_solves}")
+    print(f"Skipped: {skipped_solves}")
     print(f"Failed to solve: {failed_solves}")
-    print(f"Success rate: {100 * successful_solves / len(instances_needing_heuristic):.1f}%")
+    total_attempts = successful_solves + failed_solves
+    if total_attempts > 0:
+        print(f"Success rate (of attempted): {100 * successful_solves / total_attempts:.1f}%")
 
 
 
@@ -612,8 +707,7 @@ def get_validation_results_from_file(instance_file_path, fleet_size_override=Non
                 data = json.load(f)
                 return data.get('results', {}).get('validation', None)
     except Exception as e:
-        if os.getenv('DEBUG'):
-            print(f"Warning: Could not read validation results: {e}")
+        pass
     
     return None
 
@@ -695,12 +789,14 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", action='store_true', help="Enable verbose output")
     parser.add_argument("--gurobi-result", type=str, help="Path to Gurobi result JSON file for comparison")
     parser.add_argument("--astar-time-limit", type=float, default=300.0, help="Time limit in seconds for A* search (default: 300s)")
-    parser.add_argument("--vrp-time-limit", type=float, default=120.0, help="Time limit in seconds for VRP solving (default: 300s)")
+    parser.add_argument("--vrp-time-limit", type=float, default=300.0, help="Time limit in seconds for VRP solving (default: 300s)")
     parser.add_argument("--vrp-solver", type=str, default='scheduling', choices=['ortools', 'scheduling'], 
                         help="VRP solver to use: 'ortools' for routing-based, 'scheduling' for CP-SAT (default: ortools)")
     parser.add_argument("--fleet-size", type=int, help="Override the fleet size from the instance file")
     parser.add_argument("--auto-visualize", action='store_true', default=True, help="Automatically create visualizations (default: enabled)")
     parser.add_argument("--no-visualize", action='store_true', help="Disable automatic visualization")
+    parser.add_argument("--no-validate-gap", action='store_true', help="Skip Gurobi validation and MIP gap calculation")
+    parser.add_argument("--overwrite", action='store_true', help="Overwrite existing result files (default: False)")
     args = parser.parse_args()
 
     if not args.instance and not args.directory and not args.auto_solve:
@@ -714,7 +810,7 @@ if __name__ == "__main__":
 
     if args.auto_solve:
         # Auto-solve mode: find all solved Gurobi instances and solve with heuristic
-        solve_all_missing_heuristic_instances(args.experiments_dir, verbose, args.astar_time_limit, args.vrp_time_limit, enable_visualization, args.vrp_solver)
+        solve_all_missing_heuristic_instances(args.experiments_dir, verbose, args.astar_time_limit, args.vrp_time_limit, enable_visualization, args.vrp_solver, validate_gap=not args.no_validate_gap, overwrite=args.overwrite)
         
     elif args.instance:
         # Single instance mode
@@ -731,7 +827,7 @@ if __name__ == "__main__":
             if verbose:
                 print(f"Fleet size overridden to: {args.fleet_size}")
         
-        solve_instance(instance, verbose, args.instance, args.gurobi_result, args.astar_time_limit, args.vrp_time_limit, enable_visualization, args.vrp_solver)
+        solve_instance(instance, verbose, args.instance, args.gurobi_result, args.astar_time_limit, args.vrp_time_limit, enable_visualization, args.vrp_solver, validate_gap=not args.no_validate_gap, overwrite=args.overwrite)
     
     elif args.directory:
         # Directory mode
@@ -750,6 +846,7 @@ if __name__ == "__main__":
         
         successful_solves = 0
         failed_solves = 0
+        skipped_solves = 0
         results = []
         
         for i, json_file in enumerate(json_files, 1):
@@ -764,9 +861,13 @@ if __name__ == "__main__":
                     if verbose:
                         print(f"Fleet size overridden to: {args.fleet_size}")
                 
-                result = solve_instance(instance, verbose, json_file, None, args.astar_time_limit, args.vrp_time_limit, enable_visualization)
+                result = solve_instance(instance, verbose, json_file, None, args.astar_time_limit, args.vrp_time_limit, enable_visualization, validate_gap=not args.no_validate_gap, overwrite=args.overwrite)
                 
-                # Check if we got a result dictionary (from solve_with_comparison) or test_case (legacy)
+                if result.get('skipped'):
+                    skipped_solves += 1
+                    continue
+
+                # Check if got a result dictionary (from solve_with_comparison) or test_case (legacy)
                 if isinstance(result, dict):
                     # New path: check validation feasible status
                     if result.get('heuristic_feasible', False) and result.get('validation_feasible', True):
@@ -795,5 +896,8 @@ if __name__ == "__main__":
         print(f"\n=== BATCH PROCESSING SUMMARY ===")
         print(f"Total files processed: {len(json_files)}")
         print(f"Successfully solved: {successful_solves}")
+        print(f"Skipped: {skipped_solves}")
         print(f"Failed to solve: {failed_solves}")
-        print(f"Success rate: {100 * successful_solves / len(json_files):.1f}%")
+        total_attempts = successful_solves + failed_solves
+        if total_attempts > 0:
+            print(f"Success rate (of attempted): {100 * successful_solves / total_attempts:.1f}%")

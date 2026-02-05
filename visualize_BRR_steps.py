@@ -30,6 +30,8 @@ parser.add_argument('--subplot-timesteps', type=str, default="", help="Comma-sep
 parser.add_argument('--max_urgency_window', type=int, help='Maximum window (in time steps) for unit load retrieval urgency coloring. ULs with retrieval_end within this window from current_time_step will be colored with red-orange-yellow gradient based on urgency. ULs beyond this window will be light grey. ULs due or past due will be dark red.')
 parser.add_argument('--overwrite', dest='overwrite', action='store_true', help='Overwrite existing visualization directory if it exists.')
 parser.set_defaults(overwrite=False)
+parser.add_argument('--no-legend', dest='no_legend', action='store_true', help='Do not display the legend in the plots.')
+parser.set_defaults(no_legend=False)
 args = parser.parse_args()
 source = args.source
 color_vls = args.color_vls
@@ -38,6 +40,7 @@ all_experiments = args.all
 file = args.file
 subplot_timesteps_arg = args.subplot_timesteps
 overwrite = args.overwrite
+no_legend = args.no_legend
 
 def get_ul_color(ul_id, current_time_step, ul_retrieval_times_map, max_urgency_window):
     """Calculates the color for a unit load based on its retrieval urgency.
@@ -85,10 +88,46 @@ def get_ul_color(ul_id, current_time_step, ul_retrieval_times_map, max_urgency_w
         
         return (red, green, blue)
 
+def get_dynamic_fontsize(warehouse_shape, base_size=10, reference_max_dim=20, min_size=3):
+    """Calculates a dynamic font size based on the warehouse dimensions.
+    
+    Args:
+        warehouse_shape (tuple): The shape of the warehouse (rows, cols).
+        base_size (int): The starting font size for small instances.
+        reference_max_dim (int): The dimension up to which base_size is used.
+        min_size (int): The minimum font size to prevent text from vanishing.
+        
+    Returns:
+        float: The calculated font size.
+    """
+    max_dim = max(warehouse_shape)
+    if max_dim <= reference_max_dim:
+        return base_size
+    
+    # Calculate scale factor: scale down linearly as dimension increases
+    scale_factor = reference_max_dim / max_dim
+    return max(min_size, base_size * scale_factor)
+
 def process_file(file):
     # Load JSON data
     with open(file, 'r') as f:
         data = json.load(f)
+
+    # Pre-calculate max decisions per timestep for consistent figure size
+    all_decisions = []
+    if 'results' in data and 'decisions' in data['results']:
+        for vehicle in data['results']['decisions'].keys():
+            for t, decision in data['results']['decisions'][vehicle].items():
+                all_decisions.append((int(t), vehicle, decision))
+    all_decisions.sort(key=lambda x: x[0])
+
+    decisions_per_timestep = {}
+    for t, _, _ in all_decisions:
+        decisions_per_timestep[t] = decisions_per_timestep.get(t, 0) + 1
+    
+    max_decision_lines = 0
+    if decisions_per_timestep:
+        max_decision_lines = max(decisions_per_timestep.values())
 
     # Create a map of UL ID to retrieval_end time
     ul_retrieval_times_map = {ul['id']: ul['retrieval_end'] 
@@ -103,14 +142,16 @@ def process_file(file):
     warehouse = np.loadtxt(layout_file, delimiter=',', dtype=int)
     colors = {
         -5: 'lightgrey', # Aisles
-        1: 'white', # Slots
-        2: 'green', # Sink
+        0: 'gray', # Obstacles
+        # 1: 'white', # Slots
+        2: 'darkgreen', # Sink
         3: 'blue', # Source
         "ap": "red", # Access Points
     }
     legend = {
         -5: 'Aisles',
-        1: 'Slots',
+        0: 'Obstacles',
+        # 1: 'Slots',
         2: 'Sink',
         3: 'Source',
         "ap": "Access Points",
@@ -124,24 +165,30 @@ def process_file(file):
 
     if not source:
         del colors[3]
+        del legend[3]
 
     bays = data["initial_state"]
     init_dict = {}
     # Populate init_dict once, mapping (global_y, global_x) to ul_id
     for bay_key, bay_config in bays.items():
-        size = int(bay_key[:1])
+        # Determine bay dimensions from the data structure itself
+        # bay_config is [rows][cols][stack_height]
+        bay_rows = len(bay_config)
+        bay_cols = len(bay_config[0]) if bay_rows > 0 else 0
+
         pattern = r"row (\d+), column (\d+)"
         match = re.search(pattern, bay_key)
         if match:
             bay_layout_row = int(match.group(1)) # y-coordinate in layout
             bay_layout_col = int(match.group(2)) # x-coordinate in layout
-            for i_local_row in range(size):
-                for j_local_col in range(size):
+            for i_local_row in range(bay_rows):
+                for j_local_col in range(bay_cols):
                     global_y = bay_layout_row + i_local_row
                     global_x = bay_layout_col + j_local_col
                     # bay_config is [row][col][ul_id_in_list]
-                    ul_id_val = bay_config[i_local_row][j_local_col][0]
-                    init_dict[(global_y, global_x)] = ul_id_val
+                    if len(bay_config[i_local_row][j_local_col]) > 0:
+                        ul_id_val = bay_config[i_local_row][j_local_col][0]
+                        init_dict[(global_y, global_x)] = ul_id_val
 
     def ap_id_to_coords(ap_id, slot):
         """Converts an access point ID and tier/slot to its (x, y) coordinates.
@@ -172,35 +219,61 @@ def process_file(file):
         return None
 
     def plot_warehouse(time_step, amr_positions, ul_positions, ul_retrieval_times_map_func_arg, max_urgency_window_func_arg, decision_texts=None, initial_state=False):
-        plt.figure()
+        # Determine strict scaling for the figure to ensure slots are large enough
+        # e.g., 0.5 inches per slot
+        slot_size_inches = 0.6
+        
+        # Calculate width: slots + some padding
+        fig_width = max(8, warehouse.shape[1] * slot_size_inches)
+        
+        # Calculate height: slots + text margin
+        # We need to compute text margin in inches roughly
+        # Each text line is moved down by 0.5 units in grid coordinates.
+        # In figure inches, that is 0.5 * slot_size_inches
+        # Use max_decision_lines for consistent figure size across all frames
+        num_text_lines = max_decision_lines
+        bottom_margin_grid_units = 1.0 + num_text_lines * 0.5
+        
+        total_grid_height = warehouse.shape[0] + bottom_margin_grid_units
+        fig_height = max(8, total_grid_height * slot_size_inches)
+
+        # Dynamic fontsize logic replaced by fixed readable sizes because we scale figure size
+        # But we still want them slightly larger as requested
+        fs_ap = 8
+        fs_ul = 12
+        fs_amr = 12
+        fs_timestamp = 14
+        fs_decision = 12
+
+        plt.figure(figsize=(fig_width, fig_height))
 
         virtual_lanes = {} # Initialize virtual_lanes here
         if color_vls: # Populate if color_vls is true
             for bay in data["bay_info"].values():
                 coordinates = []
-                for col in range(bay["length"]):
-                    for row in range(bay["width"]):
+                for col in range(bay["width"]):
+                    for row in range(bay["length"]):
                         coordinates.append((bay["x"] + col, bay["y"] + row))
-            for coordinate in coordinates:
-                x = coordinate[0]
-                y = coordinate[1]
-                for ap in data["access_points"]:
-                    if ap["direction"] == "north":
-                        ap_y = ap["global_y"] + 1
-                        ap_x = ap["global_x"]
-                    elif ap["direction"] == "south":
-                        ap_y = ap["global_y"] - 1
-                        ap_x = ap["global_x"]
-                    elif ap["direction"] == "east":
-                        ap_y = ap["global_y"]
-                        ap_x = ap["global_x"] - 1
-                    elif ap["direction"] == "west":
-                        ap_y = ap["global_y"]
-                        ap_x = ap["global_x"] + 1
-                    if ap_x == x and ap_y == y:
-                        virtual_lanes[(x, y)] = {}
-                        virtual_lanes[(x, y)]["ap_id"] = ap["ap_id"]
-                        virtual_lanes[(x, y)]["access_direction"] = ap["direction"]
+                for coordinate in coordinates:
+                    x = coordinate[0]
+                    y = coordinate[1]
+                    for ap in data["access_points"]:
+                        if ap["direction"] == "north":
+                            ap_y = ap["global_y"] + 1
+                            ap_x = ap["global_x"]
+                        elif ap["direction"] == "south":
+                            ap_y = ap["global_y"] - 1
+                            ap_x = ap["global_x"]
+                        elif ap["direction"] == "east":
+                            ap_y = ap["global_y"]
+                            ap_x = ap["global_x"] - 1
+                        elif ap["direction"] == "west":
+                            ap_y = ap["global_y"]
+                            ap_x = ap["global_x"] + 1
+                        if ap_x == x and ap_y == y:
+                            virtual_lanes[(x, y)] = {}
+                            virtual_lanes[(x, y)]["ap_id"] = ap["ap_id"]
+                            virtual_lanes[(x, y)]["access_direction"] = ap["direction"]
             additional_lanes = {}
             for vl in list(virtual_lanes.keys()): # Use list() to avoid runtime error for changing dict size
                 ap_id = virtual_lanes[vl]["ap_id"]
@@ -251,21 +324,13 @@ def process_file(file):
 
 
         # Bay borders
-        linewidth = 0.025
-        for bay, config in bays.items():
-            size = int(bay[:1])
-            pattern = r"row (\d+), column (\d+)"
-            match = re.search(pattern, bay)
-            if match:
-                row = int(match.group(1))
-                col = int(match.group(2))
-
-                # Draw top and bottom borders
-                plt.gca().add_patch(plt.Rectangle((col, row), size, linewidth, color='black'))  # Top
-                plt.gca().add_patch(plt.Rectangle((col, row + size - linewidth), size, linewidth, color='black'))  # Bottom
-                # Draw left and right borders
-                plt.gca().add_patch(plt.Rectangle((col, row), linewidth, size, color='black'))  # Left
-                plt.gca().add_patch(plt.Rectangle((col + size - linewidth, row), linewidth, size, color='black'))  # Right
+        linewidth = 2
+        for bay_name, config in data["bay_info"].items():
+            x = config["x"]
+            y = config["y"]
+            w = config["width"]
+            l = config["length"]
+            plt.gca().add_patch(plt.Rectangle((x, y), w, l, fill=False, edgecolor='black', linewidth=linewidth))
 
         # Plot access points
         access_points = data['access_points']
@@ -306,7 +371,7 @@ def process_file(file):
                 ap_marker = plt.Circle((x_coord, y_coord), radius=0.1, color='red')
                 plt.gca().add_patch(ap_marker)
                 # Add label to the circle
-                plt.text(x_coord, y_coord, ap_id, color='white', ha='center', va='center', fontsize=6)
+                plt.text(x_coord, y_coord, ap_id, color='white', ha='center', va='center', fontsize=fs_ap)
 
         # Plot unit loads
         for (x, y), ul_ids in ul_positions.items():
@@ -317,36 +382,57 @@ def process_file(file):
                     current_ul_color = get_ul_color(ul_id, time_step, ul_retrieval_times_map_func_arg, max_urgency_window_func_arg)
                     
                     plt.gca().add_patch(plt.Rectangle((x + 0.2, y + 0.2), 0.6, 0.6, color=current_ul_color))
-                    plt.text(x + 0.5, y + 0.5, f"{ul_id:02d}", color='white', ha='center', va='center',
+                    plt.text(x + 0.5, y + 0.5, f"{ul_id:02d}", color='white', ha='center', va='center', fontsize=fs_ul,
                              path_effects=[pe.withStroke(linewidth=1, foreground='black')])
 
         # Plot AMRs
         if not initial_state:
             for amr_id, (x, y) in amr_positions.items():
-                amr_marker = plt.Circle((x + 0.5, y + 0.5), radius=0.3, facecolor='orange', edgecolor='black', linewidth=1.5, alpha=1.0)  # Adjust color/alpha as needed
+                amr_marker = plt.Circle((x + 0.5, y + 0.5), radius=0.4, facecolor='orange', edgecolor='black', linewidth=1.5, alpha=1.0)  # Adjust color/alpha as needed
                 plt.gca().add_patch(amr_marker)
-                plt.text(x + 0.5, y + 1.0, amr_id, color='black', ha='center', va='center',
+                plt.text(x + 0.5, y + 1.0, amr_id, color='black', ha='center', va='center', fontsize=fs_amr,
                         path_effects=[pe.withStroke(linewidth=1, foreground='white')])
 
         plt.xticks(np.arange(0, warehouse.shape[1] + 1, 1), rotation='vertical', ha='center', labels=[])  # Gridlines on the x-axis
         plt.tick_params(axis='x', top=True, bottom=False, labeltop=True, labelbottom=False)
         plt.yticks(np.arange(0, warehouse.shape[0] + 1, 1), labels=[])  # Gridlines on the y-axis
         plt.gca().invert_yaxis()
-        plt.grid(True, color='black', linewidth=.5)
+        # plt.grid(True, color='black', linewidth=.5)
+        # Manually plot grid lines to strictly confine them to the warehouse area
+        plt.vlines(np.arange(0, warehouse.shape[1] + 1), 0, warehouse.shape[0], colors='black', linewidth=0.5)
+        plt.hlines(np.arange(0, warehouse.shape[0] + 1), 0, warehouse.shape[1], colors='black', linewidth=0.5)
+
+        # Remove spines (borders)
+        plt.gca().spines['top'].set_visible(False)
+        plt.gca().spines['right'].set_visible(False)
+        plt.gca().spines['bottom'].set_visible(False)
+        plt.gca().spines['left'].set_visible(False)
+        
+        # Manually draw a box around the warehouse ONLY
+        plt.plot([0, warehouse.shape[1], warehouse.shape[1], 0, 0], 
+                 [0, 0, warehouse.shape[0], warehouse.shape[0], 0], 
+                 color='black', linewidth=1)
+        
         temp_legend = legend.copy()
         if initial_state:
             del temp_legend["ap"]
-        plt.legend([plt.Rectangle((0,0),1,1, color=color) for color in colors.values()], temp_legend.values(), loc='center left')
+        if not no_legend:
+            plt.legend([plt.Rectangle((0,0),1,1, color=color) for color in colors.values()], temp_legend.values(), loc='center left')
         # legend_ul = plt.legend(handles, ul_labels, loc='lower left')
         # plt.gca().add_artist(legend_ul)
         plt.axis('scaled')
         plt.xlim(0, warehouse.shape[1])
-        plt.ylim(warehouse.shape[0], 0)
+        # Add margin at the bottom for text (based on MAX decision lines to keep it constant)
+        bottom_margin = 1.0 + max_decision_lines * 0.5
+        plt.ylim(warehouse.shape[0] + bottom_margin, 0)
+
+        # Add an invisible point at the bottom-left corner to force bbox_inches='tight' to include the full margin
+        plt.text(0, warehouse.shape[0] + bottom_margin, ' ', color='white')
 
         # Add timestep counter with 3 digits
         if not initial_state:
             plt.text(warehouse.shape[1] - 0.5, warehouse.shape[0] + 0.5, f"Timestep: {time_step:03d}",
-                    fontsize=12, ha='right', va='bottom', color='black',
+                    fontsize=fs_timestamp, ha='right', va='top', color='black',
                     bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'),
                     path_effects=[pe.withStroke(linewidth=1, foreground='white')])
 
@@ -354,15 +440,15 @@ def process_file(file):
         if decision_texts:
             for i, decision_text in enumerate(decision_texts):
                 plt.text(0.5, warehouse.shape[0] + 0.5 + i * 0.5, f"{decision_text}",
-                        fontsize=10, ha='left', va='bottom', color='black',
+                        fontsize=fs_decision, ha='left', va='top', color='black',
                         bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'),
                         path_effects=[pe.withStroke(linewidth=1, foreground='white')])
 
         # Save the figure in the subdirectory
         if initial_state:
-            plt.savefig(os.path.join(output_dir, f"initial_state.png"), dpi=300)
+            plt.savefig(os.path.join(output_dir, f"initial_state.png"), dpi=300, bbox_inches='tight', pad_inches=0.1)
         else:
-            plt.savefig(os.path.join(output_dir, f"{time_step}.png"), dpi=300)
+            plt.savefig(os.path.join(output_dir, f"{time_step}.png"), dpi=300, bbox_inches='tight', pad_inches=0.1)
         plt.close()  # Close the figure to free up memory
 
     # Initialize AMR and unit load positions
@@ -435,14 +521,7 @@ def process_file(file):
         })
 
     # Plot subsequent time steps
-    # Concatenate decisions of all vehicles
-    all_decisions = []
-    for vehicle in data['results']['decisions'].keys():
-        for t, decision in data['results']['decisions'][vehicle].items():
-            all_decisions.append((int(t), vehicle, decision))
-
-    # Sort decisions by time steps
-    all_decisions.sort(key=lambda x: x[0])
+    # Decisions already extracted and sorted at the beginning of process_file (all_decisions)
 
 
     # Loop over sorted decisions
@@ -565,7 +644,8 @@ def process_file(file):
                                      ul_retrieval_times_map, max_urgency_window, # Pass the map and window
                                      decision_texts=frame_data["decision_texts"], 
                                      initial_state=is_true_initial_for_subplot, 
-                                     show_legend_in_subplot=show_legend_for_this_subplot)
+                                     show_legend_in_subplot=show_legend_for_this_subplot,
+                                     no_legend=no_legend)
             
             # Hide any unused subplots
             for j in range(num_plots, rows * cols):
@@ -604,16 +684,24 @@ def process_file(file):
 def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
                          data_func_arg, warehouse, colors, vl_colors, color_vls, source, debug, legend,
                          ul_retrieval_times_map_func_arg, max_urgency_window_func_arg,
-                         decision_texts=None, initial_state=False, show_legend_in_subplot=True):
+                         decision_texts=None, initial_state=False, show_legend_in_subplot=True, no_legend=False):
     """Plots the warehouse state onto a given Matplotlib Axes object."""
+    
+    # Calculate dynamic font sizes
+    fs_ap = get_dynamic_fontsize(warehouse.shape, 8) # slightly bigger default here? originally 8 in ax text, 6 in plt text
+    fs_ul = get_dynamic_fontsize(warehouse.shape, 10)
+    fs_amr = get_dynamic_fontsize(warehouse.shape, 10)
+    fs_timestamp = get_dynamic_fontsize(warehouse.shape, 12)
+    fs_decision = get_dynamic_fontsize(warehouse.shape, 9)
+
     bays = data_func_arg["initial_state"]
 
     virtual_lanes = {}
     if color_vls:
         for bay in data_func_arg["bay_info"].values():
             coordinates = []
-            for col in range(bay["length"]):
-                for row_val in range(bay["width"]):
+            for col in range(bay["width"]):
+                for row_val in range(bay["length"]):
                     coordinates.append((bay["x"] + col, bay["y"] + row_val))
             for coordinate in coordinates:
                 x = coordinate[0]
@@ -679,18 +767,15 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
             ax.add_patch(plt.Rectangle((col_idx, row_idx), 1, 1, color=cell_color))
 
     # Bay borders
-    linewidth = 0.025
-    for bay, config in bays.items():
-        size = int(bay[:1])
-        pattern = r"row (\d+), column (\d+)"
-        match = re.search(pattern, bay)
-        if match:
-            row_val = int(match.group(1))
-            col_val = int(match.group(2))
-            ax.add_patch(plt.Rectangle((col_val, row_val), size, linewidth, color='black'))
-            ax.add_patch(plt.Rectangle((col_val, row_val + size - linewidth), size, linewidth, color='black'))
-            ax.add_patch(plt.Rectangle((col_val, row_val), linewidth, size, color='black'))
-            ax.add_patch(plt.Rectangle((col_val + size - linewidth, row_val), linewidth, size, color='black'))
+    linewidth = 0.05
+    for bay_name, config in data_func_arg["bay_info"].items():
+        x = config["x"]
+        y = config["y"]
+        w = config["width"]
+        l = config["length"]
+        
+        # Draw bay border
+        ax.add_patch(plt.Rectangle((x, y), w, l, fill=False, edgecolor='black', linewidth=0.025))
 
     # Plot access points
     access_points = data_func_arg['access_points']
@@ -727,7 +812,7 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
         if not initial_state:
             ap_marker = plt.Circle((x_coord, y_coord), radius=0.1, color='red')
             ax.add_patch(ap_marker)
-            ax.text(x_coord, y_coord, ap_id, color='white', ha='center', va='center', fontsize=8) 
+            ax.text(x_coord, y_coord, ap_id, color='white', ha='center', va='center', fontsize=fs_ap) 
 
     # Plot unit loads
     for (x, y), ul_ids in ul_positions.items():
@@ -736,14 +821,14 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
             current_ul_color = get_ul_color(ul_id, time_step, ul_retrieval_times_map_func_arg, max_urgency_window_func_arg)
             ax.add_patch(plt.Rectangle((x + 0.2, y + 0.2), 0.6, 0.6, color=current_ul_color))
             ax.text(x + 0.5, y + 0.5, f"{ul_id:02d}", color='white', ha='center', va='center',
-                    fontsize=10, path_effects=[pe.withStroke(linewidth=1, foreground='black')]) 
+                    fontsize=fs_ul, path_effects=[pe.withStroke(linewidth=1, foreground='black')]) 
 
     # Plot AMRs
     if not initial_state:
         for amr_id, (amr_x, amr_y) in amr_positions.items():
-            amr_marker = plt.Circle((amr_x + 0.5, amr_y + 0.5), radius=0.3, facecolor='orange', edgecolor='black', linewidth=1.5, alpha=1.0)
+            amr_marker = plt.Circle((amr_x + 0.5, amr_y + 0.5), radius=0.4, facecolor='orange', edgecolor='black', linewidth=1.5, alpha=1.0)
             ax.add_patch(amr_marker)
-            ax.text(amr_x + 0.5, amr_y + 1.0, amr_id, color='black', ha='center', va='center', fontsize=10, 
+            ax.text(amr_x + 0.5, amr_y + 1.0, amr_id, color='black', ha='center', va='center', fontsize=fs_amr, 
                     path_effects=[pe.withStroke(linewidth=1, foreground='white')])
 
     ax.set_xticks(np.arange(0, warehouse.shape[1] + 1, 1))
@@ -752,9 +837,23 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
     ax.tick_params(axis='y', labelcolor='none')
 
     ax.invert_yaxis()
-    ax.grid(True, color='black', linewidth=.5)
+    # ax.grid(True, color='black', linewidth=.5)
+    # Manually plot grid lines to strictly confine them to the warehouse area
+    ax.vlines(np.arange(0, warehouse.shape[1] + 1), 0, warehouse.shape[0], colors='black', linewidth=0.5)
+    ax.hlines(np.arange(0, warehouse.shape[0] + 1), 0, warehouse.shape[1], colors='black', linewidth=0.5)
 
-    if show_legend_in_subplot:
+    # Remove spines (borders)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+
+    # Manually draw a box around the warehouse ONLY
+    ax.plot([0, warehouse.shape[1], warehouse.shape[1], 0, 0], 
+            [0, 0, warehouse.shape[0], warehouse.shape[0], 0], 
+            color='black', linewidth=1)
+
+    if show_legend_in_subplot and not no_legend:
         temp_legend = legend.copy()
         if initial_state:
             if "ap" in temp_legend: del temp_legend["ap"]
@@ -765,20 +864,25 @@ def plot_warehouse_to_ax(ax, time_step, amr_positions, ul_positions,
 
     ax.axis('scaled')
     ax.set_xlim(0, warehouse.shape[1])
-    ax.set_ylim(warehouse.shape[0], 0)
+    
+    # Add margin at the bottom for text
+    bottom_margin = 1.0
+    if decision_texts:
+         bottom_margin += len(decision_texts) * 0.5
+    ax.set_ylim(warehouse.shape[0] + bottom_margin, 0)
 
     # Add timestep counter
     if not initial_state:
         ax.text(warehouse.shape[1] - 0.5, warehouse.shape[0] + 0.5, f"T: {time_step:03d}",
-                fontsize=12, ha='right', va='bottom', color='black', 
+                fontsize=fs_timestamp, ha='right', va='top', color='black', 
                 bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'),
                 path_effects=[pe.withStroke(linewidth=1, foreground='white')])
 
     # Add decision text
     if decision_texts:
         for i, decision_text in enumerate(decision_texts):
-            ax.text(0.5, warehouse.shape[0] + 0.5 + i * 0.4, f"{decision_text}",
-                    fontsize=9, ha='left', va='bottom', color='black', 
+            ax.text(0.5, warehouse.shape[0] + 0.5 + i * 0.5, f"{decision_text}",
+                    fontsize=fs_decision, ha='left', va='top', color='black', 
                     bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'),
                     path_effects=[pe.withStroke(linewidth=1, foreground='white')])
 

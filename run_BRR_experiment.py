@@ -7,11 +7,28 @@ sys.path.insert(0, os.path.abspath('./src'))
 
 import argparse
 import json # Add this import
+import copy
+import numpy as np
 from src.instance.instance_loader import InstanceLoader
 from src.instance.instance import Instance
-from src.examples_gen.unit_load_gen import UnitLoadGenerator
+from src.examples_gen.multi_robot_constructive_gen import MultiRobotConstructiveGenerator
 from src.test_cases.test_case_brr import TestCaseBrr
 import gurobipy as gp
+
+class PreGeneratedContent:
+    """Helper class to provide pre-generated content to Instance."""
+    def __init__(self, unit_loads, bay_states):
+        self.unit_loads = unit_loads
+        self.bay_states = bay_states
+
+    def generate_bays_priorities(self, bays, height=1, source=True):
+        # Restore bay states
+        for i, bay in enumerate(bays):
+            bay.height = height
+            bay.state = np.array(self.bay_states[i]) # Copy state
+        
+        # Return deep copy of unit loads to avoid shared mutable state issues
+        return copy.deepcopy(self.unit_loads)
 
 def create_paths(instance):
     file = instance.get_filename()
@@ -56,8 +73,11 @@ def create_paths(instance):
 
 def generate_instances():
     files = [
+        # '8x3',
+        # 'manual',
+        'manual2',
         # 'Size_3x3_Layout_1x1_sink_source',
-        'Size_4x4_Layout_1x1_sink_source',
+        # 'Size_4x4_Layout_1x1_sink_source',
         # 'Size_5x5_Layout_1x1_sink_source',
         # 'Size_6x6_Layout_1x1_sink_source',
         # 'Size_7x7_Layout_1x1_sink_source',
@@ -71,21 +91,23 @@ def generate_instances():
         # 'Size_3x3_Layout_1x1_sink',
     ]
     ad = [
-        {"north" : True, "east" : True, "south" : True, "west" : True},
-        {"north" : False, "east" : False, "south" : True, "west" : False},
-        {"north" : False, "east" : True, "south" : True, "west" : False}, 
-        {"north" : True, "east" : False, "south" : True, "west" : False}, 
+        # {"north" : True, "east" : True, "south" : True, "west" : True},
+        # {"north" : False, "east" : False, "south" : True, "west" : False},
+        # {"north" : False, "east" : True, "south" : True, "west" : False}, 
+        {"north" : False, "east" : True, "south" : True, "west" : True}, 
+        # {"north" : True, "east" : False, "south" : True, "west" : False}, 
     ]
     # seeds = [i for i in range(10)]
-    seeds = [i for i in range(10)]
-    fill_levels = [i/10 for i in range(5, 15)]
+    seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    fill_levels = [i/10 for i in range(5, 13)]
+    # fill_levels = [0.1]
     # fill_levels = [0.1]
     # time_window_lengths = [i for i in range(30, 61, 10)]
-    time_window_lengths = [40, 50]
+    time_window_lengths = [50]
     vehicle_speeds = [1]
-    fleet_sizes = [1, 2, 3]
+    fleet_sizes = [2, 3, 4, 5, 6]
     rs_maxes = [200]
-    as_maxes = [100, 150]
+    as_maxes = [100]
     for seed in seeds: 
         for file in files: 
             for time_window_length in time_window_lengths:
@@ -93,24 +115,116 @@ def generate_instances():
                     for rs_max in rs_maxes:
                         for as_max in as_maxes:
                             for fill_level in fill_levels:
-                                for fleet_size in fleet_sizes:
-                                    for access_directions in ad:
-                                        layout_file = f"examples/{file}.csv"
-                                        instance = Instance(
-                                            layout_file=layout_file,
+                                for access_directions in ad:
+                                    try:
+                                        # Generate base content using 1 robot (consistent baseline)
+                                        base_gen = MultiRobotConstructiveGenerator(num_robots=2, seed=seed, fill_level=fill_level)
+                                        
+                                        # Create a temporary instance to generate the content
+                                        temp_layout_file = f"examples/{file}.csv"
+                                        temp_instance = Instance(
+                                            layout_file=temp_layout_file,
+                                            seed=seed,
+                                            access_directions=access_directions,
+                                            max_p=0,
+                                            fill_level=fill_level,
+                                            fleet_size=1,
+                                            vehicle_speed=vehicle_speed,
+                                            handling_time=1,
+                                            exampleGenerator=base_gen,
+                                            rs_max=rs_max,
+                                            as_max=as_max,
+                                            time_window_length=time_window_length
+                                        )
+                                        
+                                        base_unit_loads = temp_instance.unit_loads
+                                        base_bay_states = [bay.state.copy() for bay in temp_instance.wh_initial.bays]
+
+                                        for fleet_size in fleet_sizes:
+                                            # Use PreGeneratedContent
+                                            pre_gen = PreGeneratedContent(base_unit_loads, base_bay_states)
+                                            
+                                            layout_file = f"examples/{file}.csv"
+                                            instance = Instance(
+                                                layout_file=layout_file,
+                                                seed=seed,
+                                                access_directions=access_directions, 
+                                                max_p=0, 
+                                                fill_level=fill_level,
+                                                fleet_size=fleet_size,
+                                                vehicle_speed=vehicle_speed,
+                                                handling_time=1,
+                                                exampleGenerator=pre_gen,
+                                                rs_max=rs_max,
+                                                as_max=as_max,
+                                                time_window_length=time_window_length,
+                                            )
+                                            yield instance
+                                    except ValueError as e:
+                                        print(f"Skipping configuration for {file} (Loop 1) with seed {seed}, fill {fill_level}, AD {access_directions}: {e}")
+                                        continue
+                                        
+                                        # So I should move `access_directions` loop outside `fleet_size` loop.
+                                        pass
+
+    # Let's rewrite the loop structure properly.
+    for seed in seeds: 
+        for file in files: 
+            for time_window_length in time_window_lengths:
+                for vehicle_speed in vehicle_speeds:
+                    for rs_max in rs_maxes:
+                        for as_max in as_maxes:
+                            for fill_level in fill_levels:
+                                for access_directions in ad:
+                                    try:
+                                        # Generate base content using 1 robot (consistent baseline)
+                                        # We do this for each combination of parameters EXCEPT fleet_size
+                                        base_gen = MultiRobotConstructiveGenerator(num_robots=1, seed=seed, fill_level=fill_level)
+                                        
+                                        temp_layout_file = f"examples/{file}.csv"
+                                        # Create temp instance to generate content
+                                        # Note: We use the current access_directions
+                                        temp_instance = Instance(
+                                            layout_file=temp_layout_file,
                                             seed=seed,
                                             access_directions=access_directions, 
                                             max_p=0, 
                                             fill_level=fill_level,
-                                            fleet_size=fleet_size,
+                                            fleet_size=1,
                                             vehicle_speed=vehicle_speed,
                                             handling_time=1,
-                                            exampleGenerator=UnitLoadGenerator(tw_length=time_window_length, fill_level=fill_level, seed=seed, rs_max=rs_max, as_max=as_max, source=True),
+                                            exampleGenerator=base_gen,
                                             rs_max=rs_max,
                                             as_max=as_max,
                                             time_window_length=time_window_length,
                                         )
-                                        yield instance
+                                        
+                                        base_unit_loads = temp_instance.unit_loads
+                                        base_bay_states = [bay.state.copy() for bay in temp_instance.wh_initial.bays]
+
+                                        for fleet_size in fleet_sizes:
+                                            # Use PreGeneratedContent
+                                            pre_gen = PreGeneratedContent(base_unit_loads, base_bay_states)
+                                            
+                                            layout_file = f"examples/{file}.csv"
+                                            instance = Instance(
+                                                layout_file=layout_file,
+                                                seed=seed,
+                                                access_directions=access_directions, 
+                                                max_p=0, 
+                                                fill_level=fill_level,
+                                                fleet_size=fleet_size,
+                                                vehicle_speed=vehicle_speed,
+                                                handling_time=1,
+                                                exampleGenerator=pre_gen,
+                                                rs_max=rs_max,
+                                                as_max=as_max,
+                                                time_window_length=time_window_length,
+                                            )
+                                            yield instance
+                                    except ValueError as e:
+                                        print(f"Skipping configuration for {file} (Loop 2) with seed {seed}, fill {fill_level}, AD {access_directions}: {e}")
+                                        continue
 
 
 def solve_instance(instance, input_path, result_path, hash_path, feasibility_path, verbose, generate_only=False, force_resolve=False): # Add force_resolve parameter

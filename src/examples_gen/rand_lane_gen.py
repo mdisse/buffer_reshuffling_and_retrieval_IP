@@ -26,6 +26,8 @@ class RandLaneGen:
         open_lanes = set(range(len(bay.access_points)))
 
         while np.sum(lane_numbers == -1) > 0:
+            if not open_lanes:
+                raise ValueError(f"Unreachable slots in bay at ({bay.x}, {bay.y}) with current access points.")
             perm_lanes = self.rng.permutation(list(open_lanes))
             for lane_num in perm_lanes:
                 if len(lanes[lane_num]) == 0:

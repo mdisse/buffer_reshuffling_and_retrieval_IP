@@ -382,6 +382,13 @@ class TWVRPSchedulingSolver:
             start_var = model.NewIntVar(start_lower, start_upper, f'start_m{move.move_id}')
             end_var = model.NewIntVar(end_lower, end_upper, f'end_m{move.move_id}')
             
+            if self.verbose:
+                print(f"  Move {move.move_id} (UL{move.ul_id}): start=[{start_lower}, {start_upper}], end=[{end_lower}, {end_upper}], service={move.service_time}")
+                if end_lower - start_upper > move.service_time:
+                    print(f"    ⚠️  POTENTIAL INFEASIBILITY: Min End ({end_lower}) - Max Start ({start_upper}) = {end_lower - start_upper} > Service ({move.service_time})")
+                if end_upper - start_lower < move.service_time:
+                    print(f"    ⚠️  POTENTIAL INFEASIBILITY: Max End ({end_upper}) - Min Start ({start_lower}) = {end_upper - start_lower} < Service ({move.service_time})")
+
             # Create interval variable for the move
             interval_var = model.NewIntervalVar(
                 start_var, 
@@ -483,10 +490,14 @@ class TWVRPSchedulingSolver:
         for upper_retrieve_id, lower_retrieve_id in lifo_rules:
             model.Add(move_ends[upper_retrieve_id] <= move_starts[lower_retrieve_id])
         
-        # NOTE: Lane sequencing constraints are REMOVED to avoid over-constraining
-        # The lane occupancy (no-overlap) constraint already ensures moves in the same lane
-        # don't physically conflict. Precedence constraints ensure LIFO order.
-        # Lane sequencing was causing infeasibility by forcing too strict ordering.
+        # Add lane sequencing constraints (respect A* order per lane)
+        lane_sequencing_rules = self._get_lane_sequencing_rules(scheduling_moves)
+        
+        if self.verbose:
+            print(f"Lane sequencing constraints: {len(lane_sequencing_rules)}")
+        
+        for earlier_id, later_id in lane_sequencing_rules:
+            model.Add(move_ends[earlier_id] <= move_starts[later_id])
         
         # Create vehicle-specific constraints FIRST
         # We need move_assignment_vars for the lane occupancy constraints
@@ -543,8 +554,10 @@ class TWVRPSchedulingSolver:
             for v in range(self.num_vehicles):
                 is_assigned = move_assignment_vars[(move.move_id, v)]
                 
-                # Add from_lane occupancy (if it's a buffer lane)
-                if from_lane not in ['source', 'sink']:
+                # Add from_lane occupancy
+                # We record occupancy for all lanes including source/sink, 
+                # but will only enforce NoOverlap for buffer lanes later.
+                if True:
                     # Block the from_lane for the entire move duration IF assigned to vehicle v
                     lane_interval = model.NewOptionalIntervalVar(
                         move_starts[move.move_id],
@@ -558,8 +571,8 @@ class TWVRPSchedulingSolver:
                         lane_intervals[from_lane] = []
                     lane_intervals[from_lane].append(lane_interval)
                 
-                # Add to_lane occupancy (if it's a buffer lane and different from from_lane)
-                if to_lane not in ['source', 'sink'] and to_lane != from_lane:
+                # Add to_lane occupancy (if different from from_lane)
+                if to_lane != from_lane:
                     # Block the to_lane for the entire move duration IF assigned to vehicle v
                     lane_interval = model.NewOptionalIntervalVar(
                         move_starts[move.move_id],
@@ -575,8 +588,19 @@ class TWVRPSchedulingSolver:
         
         # Add no-overlap constraints for each lane (only one robot at a time)
         for lane_id, intervals_list in lane_intervals.items():
-            if len(intervals_list) > 1:
-                model.AddNoOverlap(intervals_list)
+            # Check if lane_id is Source or Sink
+            is_source_or_sink = (str(lane_id) == str(self.source_lane_id) or 
+                                 str(lane_id) == str(self.sink_lane_id) or 
+                                 str(lane_id) in ['source', 'sink'])
+            
+            # Only enforce NoOverlap for real buffer lanes (not source/sink)
+            if not is_source_or_sink:
+                if len(intervals_list) > 1:
+                    model.AddNoOverlap(intervals_list)
+            else:
+                # Source/Sink have infinite capacity (or capacity > 1)
+                # So we do NOT add the NoOverlap constraint
+                pass
         
         if self.verbose:
             print(f"Lane occupancy constraints: {sum(len(v) for v in lane_intervals.values())} intervals across {len(lane_intervals)} lanes")
@@ -1225,7 +1249,7 @@ class TWVRPSchedulingSolver:
         storage_moves = {}  # (lane, tier) -> list of (ul_id, store_move_id, retrieve_move_id)
         
         for move in scheduling_moves:
-            if move.move_type == 'store':
+            if move.move_type in ['store', 'reshuffle']:
                 # Track where this UL is stored
                 lane = self._parse_location_str(move.to_location)
                 if lane not in ['source', 'sink']:
@@ -1237,7 +1261,7 @@ class TWVRPSchedulingSolver:
                     retrieve_move = None
                     for other_move in scheduling_moves:
                         if (other_move.ul_id == move.ul_id and 
-                            other_move.move_type == 'retrieve' and
+                            other_move.move_type in ['retrieve', 'reshuffle', 'direct_retrieve'] and
                             self._parse_location_str(other_move.from_location) == lane and
                             other_move.from_tier == move.to_tier):
                             retrieve_move = other_move
@@ -1296,61 +1320,38 @@ class TWVRPSchedulingSolver:
     
     def _get_lane_sequencing_rules(self, scheduling_moves: List[SchedulingMove]) -> List[Tuple[int, int]]:
         """
-        Generate lane sequencing constraints to ensure moves follow A* order
-        for the same lane-tier combination.
+        Generate strict lane sequencing constraints.
+        If multiple moves access the same lane, they must occur in the order
+        defined by the A* sequence (move_id).
         
-        Rationale:
-        - A* determines a specific order for accessing each storage location
-        - We enforce this order to respect the plan's intent
-        - LIFO constraints (precedence) already prevent wrong retrieval order
-        - Cooldown constraints already prevent physical collisions
-        - So we only need light sequencing to maintain A*'s intended ordering
-        
-        We track moves by (lane, tier) to enforce ordering at the storage location level.
+        This ensures that we strictly follow the A* move sequence for each lane.
         """
-        lane_sequencing_rules = []
-        
-        # Group moves by (lane, tier) combination
-        lane_tier_moves = {}  # (lane_id, tier) -> list of move_ids
-        
+        sequencing_rules = []
+        lane_moves = {}
+
         for move in scheduling_moves:
-            move_type = move.move_type
+            # Check from_location
+            from_lane = self._parse_location_str(move.from_location)
+            if from_lane not in ['source', 'sink']:
+                if from_lane not in lane_moves:
+                    lane_moves[from_lane] = []
+                lane_moves[from_lane].append(move.move_id)
             
-            # For stores: track destination (to_lane, to_tier)
-            if move_type == 'store':
-                to_lane = self._parse_location_str(move.to_location)
-                if to_lane not in ['source', 'sink']:
-                    key = (to_lane, move.to_tier)
-                    if key not in lane_tier_moves:
-                        lane_tier_moves[key] = []
-                    lane_tier_moves[key].append(move.move_id)
+            # Check to_location (if different implies inter-lane move, or just different tiers)
+            to_lane = self._parse_location_str(move.to_location)
+            if to_lane not in ['source', 'sink'] and to_lane != from_lane:
+                 if to_lane not in lane_moves:
+                    lane_moves[to_lane] = []
+                 lane_moves[to_lane].append(move.move_id)
+
+        for lane, move_ids in lane_moves.items():
+            # Sort by move_id (which strictly follows A* output order)
+            sorted_ids = sorted(list(set(move_ids)))
             
-            # For retrieves: track source (from_lane, from_tier)
-            elif move_type == 'retrieve':
-                from_lane = self._parse_location_str(move.from_location)
-                if from_lane not in ['source', 'sink']:
-                    key = (from_lane, move.from_tier)
-                    if key not in lane_tier_moves:
-                        lane_tier_moves[key] = []
-                    lane_tier_moves[key].append(move.move_id)
+            for i in range(len(sorted_ids) - 1):
+                sequencing_rules.append((sorted_ids[i], sorted_ids[i+1]))
         
-        # For each lane-tier combination, enforce A* ordering
-        for (lane_id, tier), move_ids in lane_tier_moves.items():
-            # Remove duplicates while preserving A* order
-            seen = set()
-            ordered_move_ids = []
-            for mid in move_ids:
-                if mid not in seen:
-                    seen.add(mid)
-                    ordered_move_ids.append(mid)
-            
-            # Add precedence constraints for consecutive moves at same location
-            # Note: This is relaxed compared to forcing end-before-start
-            # The cooldown constraints handle physical separation
-            for i in range(len(ordered_move_ids) - 1):
-                lane_sequencing_rules.append((ordered_move_ids[i], ordered_move_ids[i + 1]))
-        
-        return lane_sequencing_rules
+        return sequencing_rules
     
     # ============= Helper Methods (same as VRP solver) =============
     

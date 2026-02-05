@@ -165,8 +165,8 @@ def process_file(file):
         if color_vls:
             for bay in data["bay_info"].values():
                 coordinates = []
-                for col in range(bay["length"]):
-                    for row in range(bay["width"]):
+                for col in range(bay["width"]):
+                    for row in range(bay["length"]):
                         coordinates.append((bay["x"] + col, bay["y"] + row))
                 for coordinate in coordinates:
                     x, y = coordinate[0], coordinate[1]
@@ -214,16 +214,13 @@ def process_file(file):
                 cell_color = get_color(row, col)
                 plt.gca().add_patch(plt.Rectangle((col, row), 1, 1, color=cell_color))
 
-        linewidth = 0.025
-        for bay, config in bays.items():
-            size = int(bay[:1])
-            match = re.search(r"row (\d+), column (\d+)", bay)
-            if match:
-                row, col = int(match.group(1)), int(match.group(2))
-                plt.gca().add_patch(plt.Rectangle((col, row), size, linewidth, color='black'))
-                plt.gca().add_patch(plt.Rectangle((col, row + size - linewidth), size, linewidth, color='black'))
-                plt.gca().add_patch(plt.Rectangle((col, row), linewidth, size, color='black'))
-                plt.gca().add_patch(plt.Rectangle((col + size - linewidth, row), linewidth, size, color='black'))
+        linewidth = 0.05
+        for bay_name, config in data["bay_info"].items():
+            x = config["x"]
+            y = config["y"]
+            w = config["width"]
+            l = config["length"]
+            plt.gca().add_patch(plt.Rectangle((x, y), w, l, fill=False, edgecolor='black', linewidth=linewidth))
 
         access_points_to_plot = data['access_points']
         used_aps = {lane['ap_id'] for lane in data['virtual_lanes']}
@@ -293,7 +290,8 @@ def process_file(file):
                      path_effects=[pe.withStroke(linewidth=1, foreground='white')])
 
         filename = "initial_state.png" if initial_state else f"move_{move_step:03d}.png"
-        plt.savefig(os.path.join(output_dir, filename), dpi=300, bbox_inches='tight')
+        # Removing bbox_inches='tight' to ensure consistent image dimensions for GIF creation
+        plt.savefig(os.path.join(output_dir, filename), dpi=300)
         plt.close()
 
     base_name = os.path.basename(file).split('.')[0]

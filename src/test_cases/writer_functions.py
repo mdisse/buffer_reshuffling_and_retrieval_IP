@@ -52,7 +52,7 @@ def save_resultsBrr(filename: str, test_case):
     f.close()
 
 
-def save_heuristic_results(filename: str, test_case):
+def save_heuristic_results(filename: str, test_case, validate=True):
     """
     Saves the results of the heuristic experiment as a json file.
     """
@@ -88,7 +88,7 @@ def save_heuristic_results(filename: str, test_case):
     validation_report = {}
     is_feasible = False
     
-    if translated_decisions:
+    if validate and translated_decisions:
         try:
             is_feasible, validation_status, validation_report = validate_heuristic_solution_detailed(
                 test_case.instance, test_case, verbose=test_case.verbose
@@ -100,6 +100,13 @@ def save_heuristic_results(filename: str, test_case):
                 "message": f"Validation error: {str(e)}",
                 "violations": [{"type": "validation_error", "description": str(e)}]
             }
+    elif not validate:
+        validation_status = -1
+        is_feasible = False
+        validation_report = {
+            "message": "Validation skipped",
+            "violations": []
+        }
     else:
         validation_status = -1
         is_feasible = False
@@ -108,14 +115,17 @@ def save_heuristic_results(filename: str, test_case):
             "violations": [{"type": "no_solution", "description": "Heuristic to find a solution"}]
         }
     
-    mip_gap_value = 0.0
-    if is_feasible and validation_report.get('_validation_mipgap') is not None:
-        mip_gap_value = validation_report['_validation_mipgap']
-    elif hasattr(test_case, 'mip_gap') and test_case.mip_gap is not None:
-        if test_case.mip_gap == float('inf'):
-            mip_gap_value = -1.0
-        else:
-            mip_gap_value = test_case.mip_gap / 100.0
+    # Prioritize the explicitly calculated MIP gap from the test case if available
+    if hasattr(test_case, 'mip_gap') and test_case.mip_gap is not None:
+        # test_case.mip_gap is stored as a percentage (0-100), but we want to save it as a ratio (0-1)
+        # to be consistent with Gurobi's standard output format
+        mip_gap_value = test_case.mip_gap / 100.0
+    elif is_feasible:
+        mip_gap_value = validation_report.get('_validation_mipgap', float('nan'))
+        if mip_gap_value is None:
+            mip_gap_value = float('nan')
+    else:
+        mip_gap_value = float('nan')
 
     data['results'] = {
         'objective_value': corrected_objective,
@@ -187,7 +197,8 @@ def save_heuristic_results(filename: str, test_case):
     for lane in test_case.instance.wh_initial.virtual_lanes:
         data['virtual_lanes'].append(lane.to_data_dict())
 
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    if os.path.dirname(filename):
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
     
     with open(filename, 'w') as f:
         json.dump(data, f, indent=4)
@@ -220,7 +231,17 @@ def generate_heuristic_result_path(instance_file_path: str, fleet_size_override=
     if filename.endswith('.json'):
         filename = filename[:-5] + '_heuristic.json'
     
-    result_path = f"{directory}/fleet_size_{fleet_size}/{filename}"
+    # Check if fleet_size directory is already in the path
+    fleet_dir = f"fleet_size_{fleet_size}"
+    if result_path.endswith(f"/{fleet_dir}/{filename}") or directory.endswith(f"/{fleet_dir}"):
+        result_path = f"{directory}/{filename}"
+    else:
+        # Only append if not already present (though usually it is present in the input path)
+        # If the input path didn't have it, we might want to add it, but for consistency with 
+        # generate_heuristic_filename, we should probably just use the directory as is 
+        # if we assume the input path structure is correct.
+        # However, to be safe and match the save function exactly:
+        result_path = f"{directory}/{filename}"
     
     return result_path
 
@@ -250,7 +271,10 @@ def generate_heuristic_filename(instance_file_path: str, fleet_size_override=Non
     if filename.endswith('.json'):
         filename = filename[:-5] + '_heuristic.json'
     
-    result_path = f"{directory}/{filename}"
+    if directory:
+        result_path = f"{directory}/{filename}"
+    else:
+        result_path = filename
     
     return result_path
 

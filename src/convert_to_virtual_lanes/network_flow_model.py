@@ -228,8 +228,16 @@ class NetworkFlowModel():
         self.create_demand_dict()
         self.v_flow = self.m.addVars(self.arcs, vtype=GRB.INTEGER, name="flow")
         self.v_used_arc = self.m.addVars(self.arcs, vtype=GRB.BINARY, name="used_arc")
-        self.m.setObjective(gp.quicksum(self.v_used_arc[arc] * (self.cost[arc]) for arc in self.arcs),
+        
+        # Objective: Minimize cost of used arcs + penalty for flow depth
+        # Adding a small penalty for flow encourages shorter, shallower lanes (balanced trees)
+        # instead of deep, long lanes when costs are otherwise equal.
+        # Flow on an arc represents the number of downstream nodes. Minimizing sum of flows minimizes total depth.
+        flow_penalty = 0.01
+        self.m.setObjective(gp.quicksum(self.v_used_arc[arc] * (self.cost[arc]) for arc in self.arcs) + 
+                            flow_penalty * gp.quicksum(self.v_flow[arc] for arc in self.arcs),
                             GRB.MINIMIZE)  # + 0.00001
+        
         big_m = self.width * self.length
         self.m.addConstrs((self.v_flow[arc] <= self.v_used_arc[arc] * big_m for arc in self.arcs), name="used_arc_flow")
         nodes_without_origin = list(self.demand.keys())

@@ -10,6 +10,7 @@ from src.examples_gen.rand_lane_gen import RandLaneGen
 
 class InstanceLoader(): 
     def __init__(self, instance_file): 
+        self.instance_path = instance_file if isinstance(instance_file, str) else None
         instance_file = self._preprocessing_instance_file(instance_file)
         self.layout_file_name = instance_file["layout_file"].split("/")[-1].split(".")[0]
         self.fill_level = instance_file["fill_level"]
@@ -23,7 +24,11 @@ class InstanceLoader():
         self.as_max = instance_file["as_max"]
         self.time_window_length = instance_file["time_window_length"]
         example_bay = list(instance_file["bay_info"].keys())[0]
-        self.access_directions = self._create_access_directions_dict(instance_file["bay_info"][example_bay]["access_directions"])
+        # Iterate over all values in the bay_info dictionary to find all access directions
+        all_directions = set()
+        for bay_info in instance_file["bay_info"].values():
+            all_directions.update(bay_info["access_directions"])
+        self.access_directions = self._create_access_directions_dict(list(all_directions))
         self.inital_state = instance_file["initial_state"]
         self.bay_info = instance_file["bay_info"]
         # Try except here to catch old instance files where the sink was not implemented yet
@@ -108,6 +113,9 @@ class InstanceLoader():
 
     def get_initial_state(self): 
         return self.inital_state
+
+    def get_instance_path(self):
+        return self.instance_path
 
     def get_layout_filename(self): 
         return f"examples/{self.layout_file_name}.csv"

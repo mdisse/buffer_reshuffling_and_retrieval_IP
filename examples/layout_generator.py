@@ -82,20 +82,19 @@ def generate(bay_max, lane_max, path_width, name_addition):
                 writer.writerows(layout)
 
 
-def generate_wide():
-    generate(10, 10, 2, '')
+# def generate_wide():
+    # generate(10, 10, 2, '')
 
 def generate_standard_layout():
-    generate(10, 10, 3, '_wide')
+    generate(2, 7, 3, '_wide')
 
 def generate_sink():
-    generate(10, 10, 2, '_sink')
+    generate(2, 7, 2, '_sink')
 
 def generate_sink_source():
-    generate(10, 10, 2, '_sink_source')
+    generate(2, 7, 2, '_sink_source')
 
 if __name__ == '__main__':
     generate_standard_layout()
-    generate_wide()
     generate_sink()
     generate_sink_source()

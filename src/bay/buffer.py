@@ -11,12 +11,14 @@ from src.bay.virtual_lane import VirtualLane
 
 
 class Buffer:
-    def __init__(self, filename: str, access_directions : dict):
+    def __init__(self, filename: str, access_directions : dict, is_manual: bool = False):
         """
         Generates a Buffer object based on a given layout. 
         Doesn't generate the stacks, leaves the bays empty.
         """
-        dictionary = layout_to_bays(filename, access_directions)
+        self.filename = filename
+        self.is_manual = is_manual
+        dictionary = layout_to_bays(filename, access_directions, is_manual=is_manual)
         self.bays = dictionary["bays"]
         self.path_nodes = dictionary["path_nodes"]
         self.edges = dictionary["edges"]
@@ -440,11 +442,13 @@ class Buffer:
         """
         lane_to_modify = self._find_lane_for_ul(ul_id)
         if lane_to_modify:
-            # Find the lane in the list by ap_id and update it
-            for i, lane in enumerate(self.virtual_lanes):
-                if lane.ap_id == lane_to_modify.ap_id:
-                    self.virtual_lanes[i], _ = lane.remove_specific_load(ul_id)
-                    break
+            # Find the lane using the object identity directly to handle duplicate ap_ids
+            try:
+                i = self.virtual_lanes.index(lane_to_modify)
+                self.virtual_lanes[i], _ = lane_to_modify.remove_specific_load(ul_id)
+            except ValueError:
+                # Should not happen if _find_lane_for_ul is correct
+                pass
 
     def get_hashable_state(self) -> tuple:
         """Creates a hashable representation from the virtual lanes."""
@@ -479,6 +483,14 @@ class Buffer:
                 if np.all(lane.stacks == 0):  # Check if all positions in the lane are empty
                     empty_lanes.append(lane)
         return empty_lanes
+
+    def get_num_non_source_sink_lanes(self) -> int:
+        """
+        Returns the number of virtual lanes that are not sources or sinks.
+        """
+        if self.virtual_lanes is None:
+            self.get_virtual_lanes()
+        return len([lane for lane in self.virtual_lanes if not lane.is_sink_or_source()])
 
     def _calculate_average_slot_distance(self) -> float:
         """
@@ -548,8 +560,8 @@ class Buffer:
             if len(lane_uls) < 2:
                 continue # No possible blocking in a lane with 0 or 1 UL
 
-            blocking_ul_ids_in_lane = set()
-
+            has_block = False
+            # Check for ANY block in the lane
             for i in range(len(lane_uls)):
                 for j in range(i + 1, len(lane_uls)):
                     ul_front_id = lane_uls[i]
@@ -561,12 +573,17 @@ class Buffer:
                     # Block if front UL has lower priority OR same priority
                     # Same priority is problematic due to tight time windows for sequential retrieval
                     if priority_front >= priority_back:
-                        # The unit load at the front (i) has lower or equal priority than the one
-                        # at the back (j), so it's a blocking item.
-                        blocking_ul_ids_in_lane.add(ul_front_id)
+                        has_block = True
+                        break
+                if has_block:
+                    break
             
-            for ul_id in blocking_ul_ids_in_lane:
-                blocking_moves.append({'ul_id': ul_id, 'from_lane': lane})
+            if has_block:
+                # If there is any block in the lane (even deep inside), the accessible item 
+                # (front of lane) must be moved to eventually resolve it.
+                # We only allow moving the accessible item to avoid creating hollow spaces.
+                accessible_ul_id = lane_uls[0]
+                blocking_moves.append({'ul_id': accessible_ul_id, 'from_lane': lane})
 
         return blocking_moves
 
@@ -593,7 +610,11 @@ class Buffer:
         
         # Copy the virtual lanes (this is the main mutable state)
         if self.virtual_lanes is not None:
-            new_buffer.virtual_lanes = [lane.copy() for lane in self.virtual_lanes]
+            # OPTIMIZATION: Use shallow copy of the list!
+            # VirtualLane objects are treated as immutable during search (add_load/remove_load returns NEW objects).
+            # This allows sharing unmodified lane objects between buffer states,
+            # drastically reducing memory usage and copy time in A*.
+            new_buffer.virtual_lanes = list(self.virtual_lanes)
         else:
             new_buffer.virtual_lanes = None
             
