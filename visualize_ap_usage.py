@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate frequency heatmaps for Access Point usage.")
-    parser.add_argument('--instance-type', type=str, required=True, help='Instance type (e.g. manual, manual2)')
+    parser.add_argument('--instance-type', type=str, help='Instance type (e.g. manual, manual2)')
+    parser.add_argument('--file', type=str, help='Path to a single result JSON file')
     return parser.parse_args()
 
 def get_ap_coords(ap_id, data):
@@ -73,26 +74,51 @@ def process_file(file_path, heatmap, warehouse):
 
 def main():
     args = parse_args()
-    base_dir = f'experiments/resultsBRR/{args.instance_type}'
     
-    if not os.path.exists(base_dir):
-        print(f"Directory not found: {base_dir}")
-        return
+    if args.file:
+        if not os.path.exists(args.file):
+            print(f"File not found: {args.file}")
+            return
+            
+        # Infer instance_type and ul_config from path if possible
+        path_parts = args.file.split(os.sep)
+        instance_type = "single_files"
+        if "resultsBRR" in path_parts:
+            idx = path_parts.index("resultsBRR")
+            if idx + 1 < len(path_parts):
+                instance_type = path_parts[idx+1]
+        
+        ul_config = next((p for p in path_parts if p.startswith('unit_loads_')), "unknown_config")
+        base_name = os.path.basename(args.file).replace(".json", "")
+        
+        groups = {f"{ul_config}_{base_name}": [args.file]}
+        output_dir = os.path.join("heatmaps", instance_type, "access_points")
+    else:
+        if not args.instance_type:
+            print("Error: Either --instance-type or --file must be provided.")
+            return
 
-    groups = {}
-    print(f"Scanning {base_dir}...")
-    for root, dirs, files in os.walk(base_dir):
-        path_parts = root.split(os.sep)
-        ul_part = next((p for p in path_parts if p.startswith('unit_loads_')), None)
-        if ul_part:
-            for file in files:
-                if file.endswith('.json') and 'heuristic' in file:
-                    groups.setdefault(ul_part, []).append(os.path.join(root, file))
+        base_dir = f'experiments/resultsBRR/{args.instance_type}'
+        
+        if not os.path.exists(base_dir):
+            print(f"Directory not found: {base_dir}")
+            return
 
-    if not groups:
-        return
+        groups = {}
+        print(f"Scanning {base_dir}...")
+        for root, dirs, files in os.walk(base_dir):
+            path_parts = root.split(os.sep)
+            ul_part = next((p for p in path_parts if p.startswith('unit_loads_')), None)
+            if ul_part:
+                for file in files:
+                    if file.endswith('.json') and 'heuristic' in file:
+                        groups.setdefault(ul_part, []).append(os.path.join(root, file))
 
-    output_dir = os.path.join("heatmaps", args.instance_type, "access_points")
+        if not groups:
+            return
+
+        output_dir = os.path.join("heatmaps", args.instance_type, "access_points")
+
     os.makedirs(output_dir, exist_ok=True)
     
     for ul_config, files in groups.items():
@@ -149,7 +175,8 @@ def main():
             sc = plt.scatter(x_coords, y_coords, c=usage_values, cmap='plasma', 
                             s=300, edgecolors='black', linewidths=0.5, alpha=0.9, zorder=10)
             cbar = plt.colorbar(sc)
-            cbar.set_label('Average Access Point Usage Count')
+            label = 'Average Access Point Usage Count' if not args.file and len(files) > 1 else 'Access Point Usage Count'
+            cbar.set_label(label)
         
         plt.tight_layout()
         save_path = os.path.join(output_dir, f"{ul_config}_heatmap_ap.png")
