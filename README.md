@@ -3,7 +3,7 @@
 This repository addresses the Buffer Reshuffling and Retrieval (BRR) problem. It implements a Mixed Integer Programming (MIP) model for exact solutions and a scalable heuristic approach designed for larger-scale automated warehouse operations.
 
 <div align="center">
-  <video src="misc/BRR_animation.mp4" width="100%" controls autoplay loop muted></video>
+  <video src="https://github.com/user-attachments/assets/c28fd613-cb21-4f2a-8509-ba2d8647413a" width="100%" controls autoplay loop muted></video>
   <br>
   <em>Visualization of the Dynamic Buffer Reshuffling and Retrieval Problem with mutliple Autonomous Mobile Robots </em>
 </div>
