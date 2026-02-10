@@ -36,27 +36,12 @@ def solve_twvrp(buffer, moves: List[Dict], num_vehicles: int = 1, instance=None,
     """
     if solver.lower() == 'scheduling':
         try:
-            from .twvrp_scheduling import solve_twvrp_with_scheduling
+            from .scheduling import solve_twvrp_with_scheduling
             return solve_twvrp_with_scheduling(buffer, moves, num_vehicles, instance, time_limit, verbose=verbose)
         except ImportError as e:
             raise ImportError(f"OR-Tools CP-SAT not available: {e}")
-    elif solver.lower() == 'ortools':
-        try:
-            from .twvrp_ortools import solve_twvrp_with_ortools
-            return solve_twvrp_with_ortools(buffer, moves, num_vehicles, instance, time_limit, verbose=verbose)
-        except ImportError as e:
-            raise ImportError(f"OR-Tools not available: {e}")
-    
     else:
-        raise ValueError(f"Unknown solver '{solver}'. Available solvers: 'ortools', 'scheduling'")
-
-
-
-
-def solve_twvrp_with_ortools(buffer, moves: List[Dict], num_vehicles: int = 1, 
-                            instance=None, time_limit=None, verbose: bool = False) -> Dict:
-    """Solve TWVRP using OR-Tools VRP solver."""
-    return solve_twvrp(buffer, moves, num_vehicles, instance, time_limit, solver='ortools', verbose=verbose)
+        raise ValueError(f"Unknown solver '{solver}'. Available solvers: 'scheduling'")
 
 
 def solve_twvrp_with_scheduling(buffer, moves: List[Dict], num_vehicles: int = 1,
