@@ -5,8 +5,10 @@ This repository addresses the Buffer Reshuffling and Retrieval (BRR) problem. It
 <div align="center">
   <video src="https://github.com/user-attachments/assets/c28fd613-cb21-4f2a-8509-ba2d8647413a" width="100%" controls autoplay loop muted></video>
   <br>
-  <em>Visualization of the Dynamic Buffer Reshuffling and Retrieval Problem with mutliple Autonomous Mobile Robots </em>
+  <em>Visualization of the Dynamic Buffer Reshuffling and Retrieval Problem with mutliple Autonomous Mobile Robots.  </em>
 </div>
+
+**Note on Visualization & Kinematic Assumptions:** The AMR driving trajectories shown in the video above are simplified for visualization purposes. As detailed in our paper, the optimization model operates under specific kinematic abstractions (e.g., constant velocity, negligible acceleration/deceleration phases). The visualization does not reflect continuous, high-fidelity kinematic constraints. For real-world deployment, we assume that the AMRs are equipped with onboard safety sensors (e.g., LIDAR) and that a dedicated, lower-level fleet management system handles continuous path smoothing and physical collision avoidance. This abstraction allows our models to focus entirely on solving the complex logical coordination, deadlock prevention, and temporal synchronization of the fleet.
 
 ## Optimization Methods
 
