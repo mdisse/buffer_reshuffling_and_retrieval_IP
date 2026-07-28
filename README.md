@@ -1,4 +1,4 @@
-# Buffer Storage, Retrieval, and Reshuffling Problem (BSRRP) Optimization
+# Buffer Storage, Reshuffling and Retrieval Problem IP Model & Heuristic
 
 This repository addresses the Buffer Storage, Retrieval, and Reshuffling Problem (BSRRP). It implements a Mixed Integer Programming (MIP) model for exact solutions and a scalable heuristic approach designed for larger-scale automated warehouse operations.
 
@@ -256,7 +256,7 @@ If you use this code in your research, please cite our repository and the corres
 ```bibtex
 @misc{disselnmeyer2025bsrrp_code,
   author       = {Disselnmeyer, Max},
-  title        = {Buffer Storage, Retrieval, and Reshuffling Problem (BSRRP) Optimization},
+  title        = {Buffer Storage, Reshuffling and Retrieval Problem IP Model & Heuristic},
   year         = {2025},
   publisher    = {GitHub},
   journal      = {GitHub repository},
@@ -271,21 +271,3 @@ This work was supported by the **Federal Ministry for Economic Affairs and Clima
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 📦 Using as a Submodule
-
-To use this repository as a submodule in another project:
-
-1. Add the submodule to your project:
-   ```bash
-   git submodule add https://github.com/yourusername/buffer_reshuffling_and_retrieval_ip.git
-   ```
-2. Install the package in editable mode from your project's root:
-   ```bash
-   pip install -e ./buffer_reshuffling_and_retrieval_ip
-   ```
-3. You can now import the modules in your code:
-   ```python
-   from bsrrp.heuristics.astar import AStarSolver
-   from bsrrp.test_cases.test_case_bsrrp import TestCaseBsrrp
-   ```
