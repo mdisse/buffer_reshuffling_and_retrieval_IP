@@ -264,6 +264,10 @@ If you use this code in your research, please cite our repository and the corres
 }
 ```
 
+## 💳 Funding
+
+This work was supported by the **Federal Ministry for Economic Affairs and Climate Action (BMWK)** [grant number 13IK0321] and the **European Union – NextGenerationEU**.
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
